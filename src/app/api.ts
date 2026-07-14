@@ -73,6 +73,7 @@ export type DashboardOverview = {
     syncRuns: number;
     products: number;
     wasteRecords: number;
+    expenses: number;
   };
   dataStatus: string;
 };

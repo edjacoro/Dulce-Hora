@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { CalendarSync, CheckCircle2, FileSpreadsheet, LockKeyhole, Server, Upload } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api } from "../api";
+import { syncHistoryInChunks, type SyncHistoryResult } from "../historySync";
 
 type IntegrationStatus = {
   phase: string;
@@ -97,6 +98,12 @@ export function IntegrationPage() {
       ]);
     }
   });
+  const syncHistory = useMutation({
+    mutationFn: () => syncHistoryInChunks(),
+    onSuccess: async () => {
+      await invalidateReporting(queryClient);
+    }
+  });
   const portalImport = useMutation({
     mutationFn: (rows: PortalSalesRow[]) =>
       api<PortalSalesImportResult>("/api/imports/portal-sales", {
@@ -184,6 +191,7 @@ export function IntegrationPage() {
         ) : null}
 
         {sync.error ? <p className="form-error">{sync.error.message}</p> : null}
+        {syncHistory.error ? <p className="form-error">{syncHistory.error.message}</p> : null}
 
         {sync.data ? (
           <div className="sync-result">
@@ -196,6 +204,30 @@ export function IntegrationPage() {
             <span>{sync.data.wasteRecordsReceived} mermas leidas</span>
             <span>{sync.data.wasteRecordsCreated} mermas nuevas</span>
             <span>{sync.data.wasteRecordsUpdated} mermas actualizadas</span>
+          </div>
+        ) : null}
+
+        <div className="sync-form">
+          <button
+            className="icon-text-button"
+            disabled={syncHistory.isPending || !status.data?.credentialsConfigured}
+            onClick={() => syncHistory.mutate()}
+            type="button"
+          >
+            <CalendarSync size={18} aria-hidden="true" />
+            {syncHistory.isPending ? "Sincronizando historial..." : "Sincronizar historial completo"}
+          </button>
+        </div>
+
+        {syncHistory.data ? (
+          <div className="sync-result">
+            <strong>Historial sincronizado</strong>
+            <span>{syncHistory.data.datesSynced} dias</span>
+            <span>{syncHistory.data.dateFrom ?? "-"} a {syncHistory.data.dateTo ?? "-"}</span>
+            <span>{syncHistory.data.recordsReceived} comprobantes leidos</span>
+            <span>{syncHistory.data.recordsCreated} nuevos</span>
+            <span>{syncHistory.data.recordsUpdated} actualizados</span>
+            <span>{syncHistory.data.wasteRecordsReceived} mermas leidas</span>
           </div>
         ) : null}
       </section>

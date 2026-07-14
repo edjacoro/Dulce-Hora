@@ -15,9 +15,11 @@ import {
   ShieldCheck,
   Trash2
 } from "lucide-react";
+import { useEffect } from "react";
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
-import { api, type MeResponse, type SetupStatus } from "./api";
+import { api, type DashboardOverview, type MeResponse, type ScheduleResponse, type SetupStatus } from "./api";
 import { dulceHoraLogo } from "./brand";
+import { syncHistoryInChunks } from "./historySync";
 import { DashboardPage } from "./pages/DashboardPage";
 import { CashflowPage } from "./pages/CashflowPage";
 import { EmployeeFilesPage } from "./pages/EmployeeFilesPage";
@@ -60,6 +62,19 @@ export function App() {
     enabled: setup.data?.required === false,
     retry: false
   });
+  const overview = useQuery({
+    queryKey: ["dashboard-overview"],
+    queryFn: () => api<DashboardOverview>("/api/dashboard/overview"),
+    enabled: setup.data?.required === false && Boolean(me.data),
+    retry: false
+  });
+  useQuery({
+    queryKey: ["schedule-bootstrap", currentMonthArgentina()],
+    queryFn: () => api<ScheduleResponse>(`/api/schedule?month=${currentMonthArgentina()}`),
+    enabled: setup.data?.required === false && Boolean(me.data),
+    retry: false,
+    staleTime: 5 * 60 * 1000
+  });
 
   const logout = useMutation({
     mutationFn: () => api<{ ok: true }>("/api/auth/logout", { method: "POST" }),
@@ -67,6 +82,55 @@ export function App() {
       await queryClient.invalidateQueries({ queryKey: ["me"] });
     }
   });
+  const autoHistorySync = useMutation({
+    mutationFn: () => syncHistoryInChunks(),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["integration-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
+        queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
+        queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
+        queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
+        queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
+        queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
+      ]);
+    }
+  });
+  const autoExpensesImport = useMutation({
+    mutationFn: () =>
+      api<{ rowsReceived: number; rowsCreated: number; rowsUpdated: number }>("/api/imports/expenses-sheet", {
+        method: "POST",
+        body: JSON.stringify({})
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["expenses"] }),
+        queryClient.invalidateQueries({ queryKey: ["expense-categories"] })
+      ]);
+    }
+  });
+
+  useEffect(() => {
+    const key = "dulce-hora-auto-history-sync-started";
+    if (!me.data || !overview.data || overview.data.counts.salesDocuments > 0) return;
+    if (autoHistorySync.status !== "idle" || window.sessionStorage.getItem(key)) return;
+    window.sessionStorage.setItem(key, "true");
+    autoHistorySync.mutate();
+  }, [autoHistorySync, me.data, overview.data]);
+
+  useEffect(() => {
+    const key = "dulce-hora-auto-expenses-import-started";
+    if (!me.data || !overview.data || overview.data.counts.expenses > 0) return;
+    if (autoExpensesImport.status !== "idle" || window.sessionStorage.getItem(key)) return;
+    window.sessionStorage.setItem(key, "true");
+    autoExpensesImport.mutate();
+  }, [autoExpensesImport, me.data, overview.data]);
 
   if (setup.isLoading) {
     return <Splash text="Preparando Dulce Hora Control" />;
@@ -182,4 +246,14 @@ function roleLabel(role: string) {
     viewer: "Lectura"
   };
   return labels[role] ?? role;
+}
+
+function currentMonthArgentina() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    year: "numeric",
+    month: "2-digit"
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}`;
 }

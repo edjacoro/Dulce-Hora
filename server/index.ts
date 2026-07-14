@@ -23,6 +23,40 @@ const port = Number(process.env.PORT ?? 8787);
 let migrationPromise: Promise<void> | null = null;
 const dulceHoraOwnerEmail = "dulcehoraurquiza@gmail.com";
 const diegoSeedPasswordHash = "$2b$12$SfJRpDgCVuJt9DnJGBqd5.lzy1DBTQkrUtBQSlJO6Keoesf0fti0a";
+const defaultEmployeeSeeds = [
+  {
+    name: "Diego",
+    role: "Dueno",
+    weeklyHours: 56,
+    color: "#2f66b3",
+    scheduleTemplate:
+      '{"mode":"fixed","label":"Horario fijo Diego","rotation":"diego","fixedShifts":[{"days":"Lunes a sabados","startTime":"06:30","endTime":"11:30"},{"days":"Lunes a sabados","startTime":"16:30","endTime":"20:00"},{"days":"Domingos","startTime":"06:30","endTime":"11:30"}],"notes":"Dueno. Horario base del local."}'
+  },
+  {
+    name: "Vicky",
+    role: "Equipo",
+    weeklyHours: 42,
+    color: "#c05a9e",
+    scheduleTemplate:
+      '{"mode":"rotating","label":"Rotacion Vicky","rotation":"vicky","fixedShifts":[{"weeks":"Semanas 1 y 3","days":"Lunes a sabados","startTime":"13:00","endTime":"20:00"},{"weeks":"Semanas 2 y 4","days":"Martes a sabados","startTime":"13:00","endTime":"20:00"},{"weeks":"Semanas 2 y 4","days":"Domingos","startTime":"11:30","endTime":"19:30"}],"notes":"Patron desde domingo 31/05/2026: Vicky descansa domingo en semanas 1 y 3, y lunes en semanas 2 y 4."}'
+  },
+  {
+    name: "Mica",
+    role: "Equipo",
+    weeklyHours: 42,
+    color: "#1f9d55",
+    scheduleTemplate:
+      '{"mode":"rotating","label":"Rotacion Mica","rotation":"mica","fixedShifts":[{"weeks":"Semanas 1 y 3","days":"Martes a sabados","startTime":"06:30","endTime":"13:30"},{"weeks":"Semanas 1 y 3","days":"Domingos","startTime":"11:30","endTime":"19:30"},{"weeks":"Semanas 2 y 4","days":"Lunes a sabados","startTime":"06:30","endTime":"13:30"}],"notes":"Patron A/B/A/C desde domingo 31/05/2026: Mica descansa lunes en semanas 1 y 3, y domingo en semanas 2 y 4."}'
+  },
+  {
+    name: "Romi",
+    role: "Equipo",
+    weeklyHours: 35,
+    color: "#f59e0b",
+    scheduleTemplate:
+      '{"mode":"fixed","label":"Horario fijo Romi","rotation":"romi","fixedShifts":[{"days":"Miercoles a sabados","startTime":"13:00","endTime":"20:00"},{"days":"Domingos","startTime":"07:30","endTime":"14:30"}],"notes":"Horario base cargado desde grilla."}'
+  }
+] as const;
 
 app.use(express.json({ limit: "5mb" }));
 app.use(attachUser);
@@ -51,7 +85,17 @@ const syncDateSchema = z.object({
   branchId: z.string().optional()
 });
 const syncHistorySchema = z.object({
-  branchId: z.string().optional()
+  branchId: z.string().optional(),
+  from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .nullable(),
+  to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .nullable()
 });
 const portalSalesImportSchema = z.object({
   rows: z
@@ -201,6 +245,40 @@ app.post("/api/setup", async (req, res) => {
       );
     }
 
+    for (const employee of defaultEmployeeSeeds) {
+      await tx.query(
+        `insert into employees
+          (id, organization_id, name, role, weekly_hours, monthly_net_salary,
+           monthly_gross_salary, employer_cost, active, source, schedule_template, color, photo_url, on_payroll)
+         values ($1, $2, $3, $4, $5, 0, null, null, true, 'default-schedule-v6', $6, $7, null, false)
+         on conflict (organization_id, name)
+         do update set weekly_hours = case
+                         when employees.weekly_hours <= 0 then excluded.weekly_hours
+                         else employees.weekly_hours
+                       end,
+                       role = case
+                         when employees.role is null or employees.role = '' then excluded.role
+                         else employees.role
+                       end,
+                       schedule_template = case
+                         when coalesce(nullif(employees.schedule_template, ''), '{}') = '{}' then excluded.schedule_template
+                         else employees.schedule_template
+                       end,
+                       color = coalesce(employees.color, excluded.color),
+                       active = true,
+                       updated_at = now()`,
+        [
+          randomUUID(),
+          organizationId,
+          employee.name,
+          employee.role,
+          employee.weeklyHours,
+          employee.scheduleTemplate,
+          employee.color
+        ]
+      );
+    }
+
     const expenseCategories = [
       ["Materia prima", "cogs"],
       ["Personal", "operating"],
@@ -308,6 +386,7 @@ app.get("/api/dashboard/overview", requireAuth, async (req, res) => {
     sync_runs: string;
     products: string;
     waste_records: string;
+    expenses: string;
   }>(
     `select
       (select count(*)::text from branches where organization_id = $1) as branches,
@@ -317,7 +396,13 @@ app.get("/api/dashboard/overview", requireAuth, async (req, res) => {
       (select count(*)::text from imports i join branches b on b.id = i.branch_id where b.organization_id = $1) as imports,
       (select count(*)::text from sync_runs sr join branches b on b.id = sr.branch_id where b.organization_id = $1) as sync_runs,
       (select count(*)::text from products where organization_id = $1) as products,
-      (select count(*)::text from waste_records wr join branches b on b.id = wr.branch_id where b.organization_id = $1) as waste_records`,
+      (select count(*)::text from waste_records wr join branches b on b.id = wr.branch_id where b.organization_id = $1) as waste_records,
+      (select count(*)::text
+       from expenses e
+       join branches b on b.id = e.branch_id
+       left join expense_categories ec on ec.id = e.category_id
+       where b.organization_id = $1
+         and coalesce(ec.pnl_group, 'operating') <> 'capex') as expenses`,
     [organizationId]
   );
 
@@ -330,7 +415,8 @@ app.get("/api/dashboard/overview", requireAuth, async (req, res) => {
       imports: Number(counts?.imports ?? 0),
       syncRuns: Number(counts?.sync_runs ?? 0),
       products: Number(counts?.products ?? 0),
-      wasteRecords: Number(counts?.waste_records ?? 0)
+      wasteRecords: Number(counts?.waste_records ?? 0),
+      expenses: Number(counts?.expenses ?? 0)
     },
     dataStatus:
       Number(counts?.sales_documents ?? 0) === 0
@@ -1417,7 +1503,9 @@ app.post(
       const result = await syncDulceHoraHistory({
         branchId: branch.id,
         organizationId: req.user!.organization_id,
-        userId: req.user!.id
+        userId: req.user!.id,
+        dateFrom: input.from ?? null,
+        dateTo: input.to ?? null
       });
 
       res.status(201).json({ ...result, branch });

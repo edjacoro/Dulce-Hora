@@ -181,7 +181,9 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
   }
 }
 
-export async function syncDulceHoraHistory(input: Omit<SyncInput, "date">): Promise<SyncHistoryResult> {
+export async function syncDulceHoraHistory(
+  input: Omit<SyncInput, "date"> & { dateFrom?: string | null; dateTo?: string | null }
+): Promise<SyncHistoryResult> {
   const credentials = getDulceHoraCredentials();
   if (!credentials) {
     throw new Error("Faltan DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en el entorno del backend");
@@ -219,7 +221,9 @@ export async function syncDulceHoraHistory(input: Omit<SyncInput, "date">): Prom
       client.fetchWasteRecords()
     ]);
     const documentsByDate = groupByDate(statistics.documents);
-    const dates = [...new Set([...documentsByDate.keys(), ...wasteDates(wastePayload)])].sort();
+    const dates = [...new Set([...documentsByDate.keys(), ...wasteDates(wastePayload)])]
+      .filter((date) => (!input.dateFrom || date >= input.dateFrom) && (!input.dateTo || date <= input.dateTo))
+      .sort();
     result.dateFrom = dates[0] ?? null;
     result.dateTo = dates.at(-1) ?? null;
 
