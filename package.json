@@ -5,7 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
-    "node": "20.x"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "concurrently -n api,web -c red,blue \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",

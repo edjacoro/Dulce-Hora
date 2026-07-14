@@ -56,7 +56,7 @@ Variables minimas en Netlify:
 DATABASE_URL=
 DULCE_HORA_USERNAME=
 DULCE_HORA_PASSWORD=
-NODE_VERSION=20
+NODE_VERSION=22.18.0
 ```
 
 `DATABASE_URL` debe apuntar a una base Postgres online, por ejemplo Neon o Supabase. Si no se configura una base persistente externa, la base embebida usada por la Function corre en `/tmp` y puede reiniciarse en cold starts. Eso sirve para validar el modelo, pero no para operar el comercio.
