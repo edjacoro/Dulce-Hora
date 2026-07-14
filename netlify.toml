@@ -2,9 +2,17 @@
   command = "pnpm build"
   publish = "dist"
 
+[build.environment]
+  NODE_VERSION = "20"
+  PNPM_VERSION = "11.7.0"
+
 [functions]
   directory = "netlify/functions"
   included_files = ["server/migrations/*.sql"]
+  node_bundler = "esbuild"
+
+[functions.api]
+  memory = "2gb"
 
 [[redirects]]
   from = "/api/*"

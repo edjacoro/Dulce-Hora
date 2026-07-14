@@ -81,7 +81,7 @@ export type SyncHistoryResult = SyncResult & {
 export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
   const credentials = getDulceHoraCredentials();
   if (!credentials) {
-    throw new Error("Faltan DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en el entorno local");
+    throw new Error("Faltan DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en el entorno del backend");
   }
 
   const runId = randomUUID();
@@ -184,7 +184,7 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
 export async function syncDulceHoraHistory(input: Omit<SyncInput, "date">): Promise<SyncHistoryResult> {
   const credentials = getDulceHoraCredentials();
   if (!credentials) {
-    throw new Error("Faltan DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en el entorno local");
+    throw new Error("Faltan DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en el entorno del backend");
   }
 
   const runId = randomUUID();

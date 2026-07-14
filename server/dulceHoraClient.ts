@@ -218,6 +218,10 @@ export class DulceHoraClient {
     const response = await fetch(url, {
       ...init,
       headers: {
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
+        "Accept-Language": "es-AR,es;q=0.9,en;q=0.7",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
         ...(init.body instanceof URLSearchParams
           ? { "Content-Type": "application/x-www-form-urlencoded" }
           : {}),

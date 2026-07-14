@@ -1362,14 +1362,20 @@ app.post(
       return;
     }
 
-    const result = await syncDulceHoraDate({
-      branchId: branch.id,
-      organizationId: req.user!.organization_id,
-      userId: req.user!.id,
-      date: input.date
-    });
+    try {
+      const result = await syncDulceHoraDate({
+        branchId: branch.id,
+        organizationId: req.user!.organization_id,
+        userId: req.user!.id,
+        date: input.date
+      });
 
-    res.status(201).json({ ...result, branch });
+      res.status(201).json({ ...result, branch });
+    } catch (error) {
+      const message = readableSyncError(error);
+      console.error("[dulce-hora:sync-date]", message, error);
+      res.status(syncErrorStatus(error)).json({ error: message });
+    }
   }
 );
 
@@ -1392,13 +1398,19 @@ app.post(
       return;
     }
 
-    const result = await syncDulceHoraHistory({
-      branchId: branch.id,
-      organizationId: req.user!.organization_id,
-      userId: req.user!.id
-    });
+    try {
+      const result = await syncDulceHoraHistory({
+        branchId: branch.id,
+        organizationId: req.user!.organization_id,
+        userId: req.user!.id
+      });
 
-    res.status(201).json({ ...result, branch });
+      res.status(201).json({ ...result, branch });
+    } catch (error) {
+      const message = readableSyncError(error);
+      console.error("[dulce-hora:sync-history]", message, error);
+      res.status(syncErrorStatus(error)).json({ error: message });
+    }
   }
 );
 
@@ -1533,6 +1545,37 @@ function sum(values: number[]) {
 function toNumber(value: unknown) {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function readableSyncError(error: unknown) {
+  const message = error instanceof Error ? error.message : "Error desconocido al sincronizar Dulce Hora";
+  if (message.includes("fetch failed")) {
+    return "No se pudo conectar desde Netlify con Dulce Hora. Puede ser un bloqueo temporal del panel o un problema de red.";
+  }
+  if (message.includes("Faltan DULCE_HORA_USERNAME") || message.includes("DULCE_HORA_PASSWORD")) {
+    return message;
+  }
+  if (message.includes("sesion de Dulce Hora") || message.includes("iniciar sesion")) {
+    return `${message}. Revisar DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en Netlify.`;
+  }
+  if (message.includes("Dulce Hora limito")) {
+    return message;
+  }
+  return message;
+}
+
+function syncErrorStatus(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  if (
+    message.includes("fetch failed") ||
+    message.includes("Dulce Hora") ||
+    message.includes("DULCE_HORA_USERNAME") ||
+    message.includes("DULCE_HORA_PASSWORD") ||
+    message.includes("sesion")
+  ) {
+    return 502;
+  }
+  return 500;
 }
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
