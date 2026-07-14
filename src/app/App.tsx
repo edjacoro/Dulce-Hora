@@ -50,6 +50,11 @@ const navItems = [
   { to: "/ajustes", label: "Ajustes", icon: Settings }
 ];
 
+const HISTORY_BOOTSTRAP_MIN_SALES = 10000;
+const HISTORY_BOOTSTRAP_MIN_WASTE = 200;
+const HISTORY_SYNC_SESSION_KEY = "dulce-hora-auto-history-sync-started-v2";
+const EXPENSES_IMPORT_SESSION_KEY = "dulce-hora-auto-expenses-import-started-v2";
+
 export function App() {
   const queryClient = useQueryClient();
   const setup = useQuery({
@@ -97,6 +102,9 @@ export function App() {
         queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
       ]);
+    },
+    onError: () => {
+      window.sessionStorage.removeItem(HISTORY_SYNC_SESSION_KEY);
     }
   });
   const autoExpensesImport = useMutation({
@@ -113,24 +121,79 @@ export function App() {
         queryClient.invalidateQueries({ queryKey: ["expenses"] }),
         queryClient.invalidateQueries({ queryKey: ["expense-categories"] })
       ]);
+    },
+    onError: () => {
+      window.sessionStorage.removeItem(EXPENSES_IMPORT_SESSION_KEY);
     }
   });
 
   useEffect(() => {
-    const key = "dulce-hora-auto-history-sync-started";
-    if (!me.data || !overview.data || overview.data.counts.salesDocuments > 0) return;
-    if (autoHistorySync.status !== "idle" || window.sessionStorage.getItem(key)) return;
-    window.sessionStorage.setItem(key, "true");
+    if (!me.data || !overview.data) return;
+    const needsHistoryBootstrap =
+      overview.data.counts.salesDocuments < HISTORY_BOOTSTRAP_MIN_SALES ||
+      overview.data.counts.wasteRecords < HISTORY_BOOTSTRAP_MIN_WASTE;
+    if (!needsHistoryBootstrap) return;
+    if (autoHistorySync.status !== "idle" || window.sessionStorage.getItem(HISTORY_SYNC_SESSION_KEY)) return;
+    window.sessionStorage.setItem(HISTORY_SYNC_SESSION_KEY, "true");
     autoHistorySync.mutate();
   }, [autoHistorySync, me.data, overview.data]);
 
   useEffect(() => {
-    const key = "dulce-hora-auto-expenses-import-started";
     if (!me.data || !overview.data || overview.data.counts.expenses > 0) return;
-    if (autoExpensesImport.status !== "idle" || window.sessionStorage.getItem(key)) return;
-    window.sessionStorage.setItem(key, "true");
+    if (autoExpensesImport.status !== "idle" || window.sessionStorage.getItem(EXPENSES_IMPORT_SESSION_KEY)) return;
+    window.sessionStorage.setItem(EXPENSES_IMPORT_SESSION_KEY, "true");
     autoExpensesImport.mutate();
   }, [autoExpensesImport, me.data, overview.data]);
+
+  useEffect(() => {
+    if (!me.data || autoHistorySync.status === "pending") return;
+
+    let cancelled = false;
+    let running = false;
+
+    const invalidateAfterSync = async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["integration-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
+        queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
+        queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
+        queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
+        queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
+        queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
+      ]);
+    };
+
+    const syncToday = async () => {
+      if (running) return;
+      running = true;
+      try {
+        await api("/api/integration/dulce-hora/sync-date", {
+          method: "POST",
+          body: JSON.stringify({ date: todayArgentina() })
+        });
+        if (!cancelled) {
+          await invalidateAfterSync();
+        }
+      } catch (error) {
+        console.warn("[dulce-hora] No se pudo sincronizar automaticamente el dia", error);
+      } finally {
+        running = false;
+      }
+    };
+
+    void syncToday();
+    const intervalId = window.setInterval(() => {
+      void syncToday();
+    }, 15 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [autoHistorySync.status, me.data, queryClient]);
 
   if (setup.isLoading) {
     return <Splash text="Preparando Dulce Hora Control" />;
@@ -256,4 +319,15 @@ function currentMonthArgentina() {
   }).formatToParts(new Date());
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}`;
+}
+
+function todayArgentina() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }

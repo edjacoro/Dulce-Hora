@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Database, FileSpreadsheet, Store, Trash2, Users } from "lucide-react";
 import { api, type DashboardOverview } from "../api";
-import { dulceHoraLogo } from "../brand";
 
 export function DashboardPage() {
   const overview = useQuery({
@@ -17,9 +16,6 @@ export function DashboardPage() {
         <div>
           <h1>Inicio</h1>
           <p>{overview.data?.dataStatus ?? "Cargando estado"}</p>
-        </div>
-        <div className="dashboard-brand-card">
-          <img src={dulceHoraLogo} alt="Dulce Hora Villa Urquiza" />
         </div>
       </div>
 
