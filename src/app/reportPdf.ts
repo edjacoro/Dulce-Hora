@@ -44,9 +44,15 @@ const colors = {
 };
 
 let logoDataUrlPromise: Promise<string | null> | null = null;
+let logoDataUrlCache: string | null = null;
+let logoPreloadStarted = false;
+
+if (typeof window !== "undefined") {
+  void preloadLogoDataUrl();
+}
 
 export async function downloadSalesPdf(summary: SalesSummary, documents: SalesDocument[], periodLabel: string) {
-  const report = await createReport("Ventas", periodLabel, "Ventas sincronizadas desde Dulce Hora");
+  const report = createReport("Ventas", periodLabel, "Ventas sincronizadas desde Dulce Hora");
   report.metrics([
     { label: "Venta neta", value: formatCurrency(summary.summary.netSales), tone: "red" },
     { label: "Tickets", value: formatInteger(summary.summary.tickets), tone: "blue" },
@@ -87,7 +93,7 @@ export async function downloadSalesPdf(summary: SalesSummary, documents: SalesDo
 }
 
 export async function downloadWastePdf(summary: WasteSummary, records: WasteRecord[], periodLabel: string) {
-  const report = await createReport("Mermas", periodLabel, "Desperdicio valorizado y porcentaje sobre venta");
+  const report = createReport("Mermas", periodLabel, "Desperdicio valorizado y porcentaje sobre venta");
   report.metrics([
     { label: "Costo de merma", value: formatCurrency(summary.summary.totalCost), tone: "red" },
     { label: "Lineas", value: formatInteger(summary.summary.records), tone: "blue" },
@@ -126,7 +132,7 @@ export async function downloadWastePdf(summary: WasteSummary, records: WasteReco
 }
 
 export async function downloadProductsPdf(data: ProductPerformance, periodLabel: string) {
-  const report = await createReport("Productos", periodLabel, "Ranking de venta, rotacion y merma cruzada");
+  const report = createReport("Productos", periodLabel, "Ranking de venta, rotacion y merma cruzada");
   report.metrics([
     { label: "Venta productos", value: formatCurrency(data.summary.revenue), tone: "blue" },
     { label: "Unidades", value: formatNumber(data.summary.quantitySold), tone: "green" },
@@ -172,7 +178,7 @@ export async function downloadProductsPdf(data: ProductPerformance, periodLabel:
 }
 
 export async function downloadSchedulePdf(data: ScheduleResponse, monthLabel: string) {
-  const report = await createReport("Grilla horaria", monthLabel, "Horas, costo estimado, feriados e inasistencias");
+  const report = createReport("Grilla horaria", monthLabel, "Horas, costo estimado, feriados e inasistencias");
   report.metrics([
     { label: "Personas activas", value: formatInteger(data.summary.employees), tone: "blue" },
     { label: "Turnos", value: formatInteger(data.summary.shifts), tone: "green" },
@@ -226,7 +232,7 @@ export async function downloadSchedulePdf(data: ScheduleResponse, monthLabel: st
 }
 
 export async function downloadEmployeeFilePdf(employee: EmployeeRecord) {
-  const report = await createReport("Ficha de empleado", employee.name, "Datos personales, laborales y plantilla horaria");
+  const report = createReport("Ficha de empleado", employee.name, "Datos personales, laborales y plantilla horaria");
   const photoDataUrl = employee.photoUrl ? await loadImageDataUrl(employee.photoUrl) : null;
   report.profile(employee, photoDataUrl);
   report.metrics([
@@ -266,9 +272,10 @@ export async function downloadEmployeeFilePdf(employee: EmployeeRecord) {
   report.save(`ficha-${filenamePeriod(employee.name)}.pdf`);
 }
 
-async function createReport(title: string, periodLabel: string, subtitle: string) {
+function createReport(title: string, periodLabel: string, subtitle: string) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-  const logoDataUrl = await loadLogoDataUrl();
+  const logoDataUrl = logoDataUrlCache;
+  void preloadLogoDataUrl();
   let y = 14;
   drawHeader(doc, title, subtitle, periodLabel, logoDataUrl);
   y = 44;
@@ -346,25 +353,34 @@ async function createReport(title: string, periodLabel: string, subtitle: string
     },
     save(filename: string) {
       drawFooter(doc);
-      doc.save(filename);
+      savePdfDocument(doc, filename);
     }
   };
 }
 
-async function loadLogoDataUrl() {
-  logoDataUrlPromise ??= fetch(dulceHoraLogo)
-    .then(async (response) => {
-      if (!response.ok) return null;
-      const blob = await response.blob();
-      return new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(blob);
-      });
+function preloadLogoDataUrl() {
+  if (logoPreloadStarted) return logoDataUrlPromise ?? Promise.resolve(logoDataUrlCache);
+  logoPreloadStarted = true;
+  logoDataUrlPromise = loadImageDataUrl(dulceHoraLogo)
+    .then((dataUrl) => {
+      logoDataUrlCache = dataUrl;
+      return dataUrl;
     })
     .catch(() => null);
   return logoDataUrlPromise;
+}
+
+function savePdfDocument(doc: jsPDF, filename: string) {
+  const blob = doc.output("blob");
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = "noopener";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 async function loadImageDataUrl(source: string) {
