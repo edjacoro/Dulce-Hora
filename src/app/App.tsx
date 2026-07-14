@@ -52,7 +52,7 @@ const navItems = [
 
 const HISTORY_BOOTSTRAP_MIN_SALES = 10000;
 const HISTORY_BOOTSTRAP_MIN_WASTE = 200;
-const HISTORY_SYNC_SESSION_KEY = "dulce-hora-auto-history-sync-started-v2";
+const HISTORY_SYNC_SESSION_KEY = "dulce-hora-auto-history-sync-started-v3";
 const EXPENSES_IMPORT_SESSION_KEY = "dulce-hora-auto-expenses-import-started-v2";
 
 export function App() {
@@ -89,7 +89,7 @@ export function App() {
   });
   const autoHistorySync = useMutation({
     mutationFn: () => syncHistoryInChunks(),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
         queryClient.invalidateQueries({ queryKey: ["integration-status"] }),
@@ -102,6 +102,9 @@ export function App() {
         queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
       ]);
+      if (result.errors.length > 0) {
+        window.sessionStorage.removeItem(HISTORY_SYNC_SESSION_KEY);
+      }
     },
     onError: () => {
       window.sessionStorage.removeItem(HISTORY_SYNC_SESSION_KEY);

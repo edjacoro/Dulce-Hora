@@ -21,24 +21,42 @@ export type SyncHistoryResult = SyncResult & {
 };
 
 const defaultHistoryStartDate = "2026-04-17";
-const chunkSizeDays = 5;
 
 export async function syncHistoryInChunks(
   onChunk?: (result: SyncHistoryResult, chunk: { from: string; to: string; index: number; total: number }) => void
 ) {
-  const chunks = dateChunks(historyStartDate(), todayArgentina(), chunkSizeDays);
+  const chunks = dateChunks(historyStartDate(), todayArgentina(), 1);
   let aggregate = emptyHistoryResult();
 
   for (const [index, chunk] of chunks.entries()) {
-    const result = await api<SyncHistoryResult>("/api/integration/dulce-hora/sync-history", {
-      method: "POST",
-      body: JSON.stringify({ from: chunk.from, to: chunk.to })
-    });
-    aggregate = mergeHistoryResults(aggregate, result);
+    try {
+      const result = await api<SyncResult>("/api/integration/dulce-hora/sync-date", {
+        method: "POST",
+        body: JSON.stringify({ date: chunk.from })
+      });
+      aggregate = mergeHistoryResults(aggregate, dateResultToHistory(result));
+    } catch (error) {
+      aggregate.errors.push(`${chunk.from}: ${error instanceof Error ? error.message : "Error desconocido"}`);
+    }
     onChunk?.(aggregate, { ...chunk, index: index + 1, total: chunks.length });
   }
 
+  if (aggregate.errors.length >= chunks.length) {
+    throw new Error("No se pudo sincronizar ningun dia del historial de Dulce Hora");
+  }
+
   return aggregate;
+}
+
+function dateResultToHistory(result: SyncResult): SyncHistoryResult {
+  const hasData = result.recordsReceived > 0 || result.wasteRecordsReceived > 0;
+  return {
+    ...result,
+    date: "historial",
+    dateFrom: result.date,
+    dateTo: result.date,
+    datesSynced: hasData ? 1 : 0
+  };
 }
 
 function mergeHistoryResults(left: SyncHistoryResult, right: SyncHistoryResult): SyncHistoryResult {

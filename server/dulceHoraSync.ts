@@ -112,27 +112,12 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
       client.fetchStatistics(),
       client.fetchWasteRecords()
     ]);
-    const entries = statistics.documents.filter((document) => documentDate(document) === input.date);
-    result.recordsReceived = entries.length;
 
-    for (const detail of entries) {
-      try {
-        const parsed = parseDocument(statisticsDocument(detail), input.date, statistics.catalog);
-        const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
-        result.recordsCreated += upsert.created ? 1 : 0;
-        result.recordsUpdated += upsert.created ? 0 : 1;
-        result.itemRows += parsed.items.length;
-      } catch (error) {
-        result.recordsRejected += 1;
-        result.errors.push(error instanceof Error ? error.message : "Error desconocido");
-      }
-    }
+    const catalog = statistics.catalog.size > 0 ? statistics.catalog : await client.fetchCatalog();
+    const registryEntries = await client.fetchRegistry(input.date);
 
-    if (entries.length === 0) {
-      const catalog = statistics.catalog.size > 0 ? statistics.catalog : await client.fetchCatalog();
-      const registryEntries = await client.fetchRegistry(input.date);
+    if (registryEntries.length > 0) {
       result.recordsReceived = registryEntries.length;
-
       for (const entry of registryEntries) {
         try {
           const document = await fetchDocumentWithRetry(client, entry);
@@ -154,6 +139,22 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
             }
             continue;
           }
+          result.recordsRejected += 1;
+          result.errors.push(error instanceof Error ? error.message : "Error desconocido");
+        }
+      }
+    } else {
+      const entries = statistics.documents.filter((document) => documentDate(document) === input.date);
+      result.recordsReceived = entries.length;
+
+      for (const detail of entries) {
+        try {
+          const parsed = parseDocument(statisticsDocument(detail), input.date, catalog);
+          const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
+          result.recordsCreated += upsert.created ? 1 : 0;
+          result.recordsUpdated += upsert.created ? 0 : 1;
+          result.itemRows += parsed.items.length;
+        } catch (error) {
           result.recordsRejected += 1;
           result.errors.push(error instanceof Error ? error.message : "Error desconocido");
         }
@@ -268,7 +269,8 @@ export async function syncDulceHoraHistory(
 }
 
 async function fetchDocumentWithRetry(client: DulceHoraClient, entry: RegistryEntry) {
-  const retries = Number(process.env.DULCE_HORA_RATE_LIMIT_RETRIES ?? 1);
+  const defaultRetries = process.env.NETLIFY === "true" ? 0 : 1;
+  const retries = Number(process.env.DULCE_HORA_RATE_LIMIT_RETRIES ?? defaultRetries);
   const pauseMs = Number(process.env.DULCE_HORA_RATE_LIMIT_PAUSE_MS ?? 65000);
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
