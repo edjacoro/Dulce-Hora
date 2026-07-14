@@ -40,10 +40,12 @@ type SyncResult = {
 };
 
 type PortalProvider = "pedidosya" | "rappi" | "otro";
+type PortalPaymentKind = "online" | "cash";
 
 type PortalSalesRow = {
   date: string;
   provider: PortalProvider;
+  paymentKind?: PortalPaymentKind;
   total: number;
   orders: number;
   hour?: string | null;
@@ -64,6 +66,7 @@ export function IntegrationPage() {
   const [date, setDate] = useState(() => todayArgentina());
   const [portalForm, setPortalForm] = useState({
     provider: "pedidosya" as PortalProvider,
+    paymentKind: "online" as PortalPaymentKind,
     date: todayArgentina(),
     total: "",
     orders: "",
@@ -120,6 +123,7 @@ export function IntegrationPage() {
       {
         date: portalForm.date,
         provider: portalForm.provider,
+        paymentKind: portalForm.paymentKind,
         total,
         orders,
         hour: portalForm.hour || null,
@@ -210,13 +214,24 @@ export function IntegrationPage() {
               onChange={(event) =>
                 setPortalForm((current) => ({
                   ...current,
-                  provider: event.target.value as PortalProvider
+                  provider: event.target.value as PortalProvider,
+                  paymentKind: event.target.value === "pedidosya" ? current.paymentKind : "online"
                 }))
               }
             >
               <option value="pedidosya">Pedidos Ya</option>
               <option value="rappi">Rappi</option>
               <option value="otro">Otro portal</option>
+            </select>
+          </label>
+          <label>
+            Tipo cobro
+            <select
+              value={portalForm.paymentKind}
+              onChange={(event) => setPortalForm((current) => ({ ...current, paymentKind: event.target.value as PortalPaymentKind }))}
+            >
+              <option value="online">Online / plataforma</option>
+              <option value="cash">Efectivo</option>
             </select>
           </label>
           <label>
@@ -272,7 +287,7 @@ export function IntegrationPage() {
             <textarea
               rows={4}
               value={csvText}
-              placeholder="2026-07-12;pedidosya;150000;22;20:00"
+              placeholder="2026-07-12;pedidosya;online;150000;22;20:00"
               onChange={(event) => setCsvText(event.target.value)}
             />
           </label>
@@ -387,6 +402,7 @@ async function invalidateReporting(queryClient: QueryClient) {
     queryClient.invalidateQueries({ queryKey: ["integration-status"] }),
     queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
     queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
+    queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] }),
     queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
     queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
     queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
@@ -403,9 +419,16 @@ function parsePortalCsv(value: string): PortalSalesRow[] {
     .filter(Boolean)
     .flatMap((line, index) => {
       const separator = line.includes(";") ? ";" : ",";
-      const [rawDate, rawProvider, rawTotal, rawOrders, rawHour, ...notes] = line
+      const parts = line
         .split(separator)
         .map((part) => part.trim());
+      const [rawDate, rawProvider] = parts;
+      const maybePaymentKind = normalizePaymentKind(parts[2]);
+      const rawPaymentKind = maybePaymentKind ?? "online";
+      const rawTotal = maybePaymentKind ? parts[3] : parts[2];
+      const rawOrders = maybePaymentKind ? parts[4] : parts[3];
+      const rawHour = maybePaymentKind ? parts[5] : parts[4];
+      const notes = maybePaymentKind ? parts.slice(6) : parts.slice(5);
 
       if (index === 0 && rawDate?.toLowerCase().includes("fecha")) {
         return [];
@@ -425,6 +448,7 @@ function parsePortalCsv(value: string): PortalSalesRow[] {
         {
           date,
           provider,
+          paymentKind: rawPaymentKind,
           total,
           orders,
           hour,
@@ -443,6 +467,21 @@ function normalizeProvider(value: string | undefined): PortalProvider {
     return "rappi";
   }
   return "otro";
+}
+
+function normalizePaymentKind(value: string | undefined): PortalPaymentKind | null {
+  const normalized = (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, "");
+  if (["online", "plataforma", "app", "tarjeta"].includes(normalized)) {
+    return "online";
+  }
+  if (["efectivo", "cash"].includes(normalized)) {
+    return "cash";
+  }
+  return null;
 }
 
 function normalizeDate(value: string | undefined) {

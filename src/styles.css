@@ -1094,6 +1094,57 @@ a {
   font-weight: 800;
 }
 
+.account-balance-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.account-balance-card {
+  display: grid;
+  gap: 6px;
+  min-height: 92px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.account-balance-card span,
+.account-balance-card small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.account-balance-card strong {
+  font-size: 1.35rem;
+}
+
+.movement-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.movement-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.movement-row span {
+  display: grid;
+  gap: 2px;
+}
+
+.movement-row small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .cashflow-negative-row {
   background: #fff8f8;
 }
@@ -1118,6 +1169,17 @@ a {
   margin-top: 2px;
   color: var(--muted);
   font-weight: 600;
+}
+
+.inline-select {
+  min-width: 150px;
+  max-width: 190px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 8px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 800;
 }
 
 .horizontal-row {
@@ -1743,6 +1805,7 @@ a {
   .split-layout,
   .employee-files-layout,
   .product-insight-grid,
+  .account-balance-grid,
   .settings-grid,
   .schedule-edit-layout,
   .expenses-layout,
@@ -1766,8 +1829,9 @@ a {
   .kpi-grid,
     .sync-form,
     .split-layout,
-    .employee-files-layout,
-    .product-insight-grid,
+  .employee-files-layout,
+  .product-insight-grid,
+    .account-balance-grid,
     .settings-grid,
     .period-controls,
     .day-nav,

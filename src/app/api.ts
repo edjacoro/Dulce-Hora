@@ -332,6 +332,17 @@ export type CashflowDashboard = {
     from: string;
     to: string;
   };
+  accounts: Array<{
+    key: CashAccountKey;
+    label: string;
+    balance: number;
+    monthIn: number;
+    monthOut: number;
+  }>;
+  accountOptions: Array<{
+    key: CashAccountKey;
+    label: string;
+  }>;
   rules: {
     efectivo: number;
     transferencias: number;
@@ -343,12 +354,13 @@ export type CashflowDashboard = {
   };
   summary: {
     grossSales: number;
-    immediateSales: number;
-    portalPayouts: number;
     commissions: number;
     expensesPaid: number;
     expensesPending: number;
     withdrawals: number;
+    transfersIn: number;
+    transfersOut: number;
+    adjustments: number;
     netCash: number;
     closingBalance: number;
     pendingPortalPayouts: number;
@@ -357,12 +369,13 @@ export type CashflowDashboard = {
     date: string;
     label: string;
     grossSales: number;
-    immediateSales: number;
-    portalPayouts: number;
     commissions: number;
     expensesPaid: number;
     expensesPending: number;
     withdrawals: number;
+    transfersIn: number;
+    transfersOut: number;
+    adjustments: number;
     netCash: number;
     closingBalance: number;
   }>;
@@ -373,6 +386,21 @@ export type CashflowDashboard = {
     netCash: number;
     documents: number;
   }>;
+  transfers: Array<{
+    id: string;
+    transfer_date: string;
+    from_account: CashAccountKey;
+    to_account: CashAccountKey;
+    amount: string;
+    notes: string | null;
+  }>;
+  adjustments: Array<{
+    id: string;
+    adjustment_date: string;
+    account: CashAccountKey;
+    amount: string;
+    notes: string | null;
+  }>;
   pendingPayouts: Array<{
     date: string;
     provider: string;
@@ -381,6 +409,8 @@ export type CashflowDashboard = {
     commissions: number;
   }>;
 };
+
+export type CashAccountKey = "cash" | "pedidosya" | "rappi" | "mercado_pago" | "banco_provincia";
 
 export type ExpenseCategory = {
   id: string;
@@ -403,6 +433,7 @@ export type ExpenseRecord = {
   deferred: boolean;
   paid_date: string | null;
   due_date: string | null;
+  cash_account: CashAccountKey | null;
   source: string;
   external_id: string | null;
   created_at: string;
@@ -446,6 +477,7 @@ export type ProfitWithdrawalRecord = {
   amount: string;
   status: "paid" | "pending";
   payment_method: string | null;
+  cash_account: CashAccountKey | null;
   notes: string | null;
   investor_id: string;
   investor_name: string;

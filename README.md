@@ -43,6 +43,24 @@ Para detener los servidores locales, usar `detener-app.bat`.
 
 En el primer ingreso la app muestra la configuracion inicial para crear el usuario owner. No hay credenciales por defecto.
 
+## Deploy en Netlify
+
+El repositorio incluye `netlify.toml` y una Function en `netlify/functions/api.ts`.
+Netlify publica el frontend desde `dist` y redirige `/api/*` al backend serverless.
+
+Importante: para que exista backend online, Netlify tiene que construir y desplegar Functions. Usar un deploy conectado a Git o Netlify CLI desde la raiz del repositorio. Si se arrastra solamente `dist` como sitio estatico, `/api/*` no va a existir y la app no va a poder conectarse al backend.
+
+Variables minimas en Netlify:
+
+```bash
+DATABASE_URL=
+DULCE_HORA_USERNAME=
+DULCE_HORA_PASSWORD=
+NODE_VERSION=20
+```
+
+`DATABASE_URL` debe apuntar a una base Postgres online, por ejemplo Neon o Supabase. Si no se configura una base persistente externa, la base embebida usada por la Function corre en `/tmp` y puede reiniciarse en cold starts. Eso sirve para validar el modelo, pero no para operar el comercio.
+
 ## Documentacion
 
 - [Auditoria OSS](docs/oss-architecture-analysis.md)

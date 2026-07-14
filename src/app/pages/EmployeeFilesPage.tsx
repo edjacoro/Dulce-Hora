@@ -129,8 +129,10 @@ export function EmployeeFilesPage() {
   );
   const computedSocialCharges = useMemo(() => employeeSocialCharges(form), [form]);
   const computedCost = useMemo(() => employeeEmployerCost(form), [form]);
+  const computedWeeklyHours = useMemo(() => scheduleWeeklyHours(form.scheduleTemplate), [form.scheduleTemplate]);
   const socialChargesInputValue = computedSocialCharges ? formatInputNumber(computedSocialCharges) : "";
   const costInputValue = computedCost ? formatInputNumber(computedCost) : "";
+  const weeklyHoursInputValue = computedWeeklyHours > 0 ? formatInputNumber(computedWeeklyHours) : form.weeklyHours;
 
   return (
     <section className="page-section employee-files-page">
@@ -301,7 +303,15 @@ export function EmployeeFilesPage() {
             </label>
             <label>
               Horas semanales
-              <input value={form.weeklyHours} onChange={(event) => updateForm(setForm, "weeklyHours", event.target.value)} inputMode="decimal" />
+              <input
+                readOnly={computedWeeklyHours > 0}
+                value={weeklyHoursInputValue}
+                onChange={(event) => updateForm(setForm, "weeklyHours", event.target.value)}
+                inputMode="decimal"
+              />
+              <small className="field-hint">
+                {computedWeeklyHours > 0 ? "Calculado desde las franjas laborales" : "Manual hasta cargar franjas"}
+              </small>
             </label>
             <label>
               Sueldo neto
@@ -472,6 +482,7 @@ function employeeToForm(employee: EmployeeRecord): EmployeeForm {
 function employeePayload(form: EmployeeForm) {
   const socialCharges = employeeSocialCharges(form);
   const employerCost = employeeEmployerCost(form);
+  const computedWeeklyHours = scheduleWeeklyHours(form.scheduleTemplate);
   return {
     id: form.id || null,
     name: form.name,
@@ -482,7 +493,7 @@ function employeePayload(form: EmployeeForm) {
     birthDate: form.birthDate || null,
     role: form.role,
     observations: form.observations,
-    weeklyHours: numberFromInput(form.weeklyHours),
+    weeklyHours: computedWeeklyHours > 0 ? computedWeeklyHours : numberFromInput(form.weeklyHours),
     monthlyNetSalary: numberFromInput(form.monthlyNetSalary),
     monthlyGrossSalary: socialCharges,
     employerCost,
@@ -612,6 +623,56 @@ function formatInputNumber(value: number) {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2
   }).format(value);
+}
+
+function scheduleWeeklyHours(template: EmployeeScheduleTemplate) {
+  return Math.round(
+    template.fixedShifts.reduce((total, block) => {
+      const hours = hoursBetween(block.startTime, block.endTime);
+      const days = dayCountFor(block.days);
+      const factor = weekFactorFor(block.weeks ?? "");
+      return total + hours * days * factor;
+    }, 0) * 100
+  ) / 100;
+}
+
+function hoursBetween(startTime: string, endTime: string) {
+  const [startHour, startMinute] = startTime.split(":").map(Number);
+  const [endHour, endMinute] = endTime.split(":").map(Number);
+  if (![startHour, startMinute, endHour, endMinute].every(Number.isFinite)) return 0;
+  const start = startHour * 60 + startMinute;
+  let end = endHour * 60 + endMinute;
+  if (end < start) end += 24 * 60;
+  return Math.max(0, (end - start) / 60);
+}
+
+function dayCountFor(value: string) {
+  const text = normalizeScheduleText(value);
+  const dayNames = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
+  const rangeMatch = text.match(/(domingo|lunes|martes|miercoles|jueves|viernes|sabado)s?\s+a\s+(domingo|lunes|martes|miercoles|jueves|viernes|sabado)s?/);
+  if (rangeMatch) {
+    const start = dayNames.indexOf(rangeMatch[1]);
+    const end = dayNames.indexOf(rangeMatch[2]);
+    if (start >= 0 && end >= 0) return end >= start ? end - start + 1 : dayNames.length - start + end + 1;
+  }
+  const found = dayNames.filter((day) => text.includes(day));
+  return new Set(found).size;
+}
+
+function weekFactorFor(value: string) {
+  const text = normalizeScheduleText(value);
+  if (!text) return 1;
+  const weeks = [...new Set([...text.matchAll(/[1-4]/g)].map((match) => match[0]))];
+  if (weeks.length > 0) return weeks.length / 4;
+  if (text.includes("altern")) return 0.5;
+  return 1;
+}
+
+function normalizeScheduleText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
 async function resizeImageFile(file: File) {

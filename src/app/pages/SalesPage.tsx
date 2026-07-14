@@ -1,12 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ArrowRight,
   BadgeDollarSign,
+  Building2,
   Clock3,
   Coffee,
   CreditCard,
   Download,
+  Plus,
   ReceiptText,
   ShoppingBag
 } from "lucide-react";
@@ -20,11 +22,31 @@ type SalesResponse = {
 
 type PeriodMode = "day" | "range";
 
+type CorporateSaleForm = {
+  saleDate: string;
+  saleTime: string;
+  customerName: string;
+  total: string;
+  paymentMethod: "efectivo" | "virtual" | "credito" | "debito" | "otro";
+  notes: string;
+};
+
+const emptyCorporateSaleForm = (): CorporateSaleForm => ({
+  saleDate: today(),
+  saleTime: "",
+  customerName: "",
+  total: "",
+  paymentMethod: "virtual",
+  notes: ""
+});
+
 export function SalesPage() {
+  const queryClient = useQueryClient();
   const [mode, setMode] = useState<PeriodMode>("day");
   const [selectedDate, setSelectedDate] = useState(() => today());
   const [from, setFrom] = useState(() => monthStart());
   const [to, setTo] = useState(() => today());
+  const [corporateForm, setCorporateForm] = useState<CorporateSaleForm>(() => emptyCorporateSaleForm());
   const effectiveFrom = mode === "day" ? selectedDate : from;
   const effectiveTo = mode === "day" ? selectedDate : to;
   const query = dateQuery(effectiveFrom, effectiveTo);
@@ -37,6 +59,22 @@ export function SalesPage() {
   const sales = useQuery({
     queryKey: ["sales-documents", effectiveFrom, effectiveTo],
     queryFn: () => api<SalesResponse>(`/api/sales/documents${recordsQuery}`)
+  });
+  const createCorporateSale = useMutation({
+    mutationFn: (payload: unknown) =>
+      api<{ id: string }>("/api/sales/corporate", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      }),
+    onSuccess: async () => {
+      setCorporateForm(emptyCorporateSaleForm());
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
+        queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
+        queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] })
+      ]);
+    }
   });
 
   const documents = sales.data?.documents ?? [];
@@ -103,6 +141,98 @@ export function SalesPage() {
           tone="green"
         />
       </div>
+
+      <section className="content-band compact-band">
+        <div className="table-heading">
+          <h2>
+            <Building2 size={18} aria-hidden="true" />
+            Venta corporativa
+          </h2>
+          <span className="period-chip">Carga manual</span>
+        </div>
+        <form
+          className="form-grid dense-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const total = Number(corporateForm.total);
+            if (!Number.isFinite(total) || total <= 0) return;
+            createCorporateSale.mutate({
+              saleDate: corporateForm.saleDate,
+              saleTime: corporateForm.saleTime || null,
+              customerName: corporateForm.customerName,
+              total,
+              paymentMethod: corporateForm.paymentMethod,
+              notes: corporateForm.notes
+            });
+          }}
+        >
+          <label>
+            Fecha
+            <input
+              value={corporateForm.saleDate}
+              onChange={(event) => setCorporateForm((current) => ({ ...current, saleDate: event.target.value }))}
+              type="date"
+            />
+          </label>
+          <label>
+            Hora
+            <input
+              value={corporateForm.saleTime}
+              onChange={(event) => setCorporateForm((current) => ({ ...current, saleTime: event.target.value }))}
+              type="time"
+            />
+          </label>
+          <label>
+            Cliente
+            <input
+              value={corporateForm.customerName}
+              onChange={(event) => setCorporateForm((current) => ({ ...current, customerName: event.target.value }))}
+              placeholder="Empresa o contacto"
+            />
+          </label>
+          <label>
+            Medio
+            <select
+              value={corporateForm.paymentMethod}
+              onChange={(event) =>
+                setCorporateForm((current) => ({
+                  ...current,
+                  paymentMethod: event.target.value as CorporateSaleForm["paymentMethod"]
+                }))
+              }
+            >
+              <option value="efectivo">Efectivo</option>
+              <option value="virtual">Transferencias</option>
+              <option value="credito">Posnet</option>
+              <option value="debito">Cuenta DNI</option>
+              <option value="otro">Otro</option>
+            </select>
+          </label>
+          <label>
+            Total
+            <input
+              value={corporateForm.total}
+              onChange={(event) => setCorporateForm((current) => ({ ...current, total: event.target.value }))}
+              inputMode="decimal"
+              placeholder="0"
+            />
+          </label>
+          <label>
+            Nota
+            <input
+              value={corporateForm.notes}
+              onChange={(event) => setCorporateForm((current) => ({ ...current, notes: event.target.value }))}
+              placeholder="Detalle interno"
+            />
+          </label>
+          {createCorporateSale.error ? <p className="form-error">{createCorporateSale.error.message}</p> : null}
+          {createCorporateSale.isSuccess ? <p className="form-success">Venta corporativa cargada.</p> : null}
+          <button className="primary-button full" disabled={createCorporateSale.isPending} type="submit">
+            <Plus size={17} aria-hidden="true" />
+            {createCorporateSale.isPending ? "Guardando..." : "Guardar venta corporativa"}
+          </button>
+        </form>
+      </section>
 
       {documents.length === 0 ? (
         <section className="content-band">
@@ -413,7 +543,10 @@ function formatPaymentMethod(value: string | null) {
     virtual: "Transferencias",
     credito: "Posnet",
     debito: "Cuenta DNI",
-    efectivo: "efectivo"
+    efectivo: "efectivo",
+    multiple: "Mixto Dulce Hora",
+    pedidosya: "Pedidos Ya",
+    rappi: "Rappi"
   };
   return value ? labels[value.toLowerCase()] ?? value : "Sin dato";
 }

@@ -73,7 +73,7 @@ export function App() {
   }
 
   if (setup.isError) {
-    return <Splash text="No se pudo conectar con el backend local" />;
+    return <Splash text="No se pudo conectar con el backend de la app" />;
   }
 
   if (setup.data?.required) {

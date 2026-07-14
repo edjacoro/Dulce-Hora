@@ -1,9 +1,8 @@
-import { useMutation, useQuery, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ArrowRight,
   BadgeDollarSign,
-  CalendarSync,
   FileDown,
   FileSpreadsheet,
   ListChecks,
@@ -17,13 +16,10 @@ import { api, type FinanceDailyRow, type FinanceDashboard, type FinanceMonthRow 
 type TabId =
   | "hoy"
   | "resumen"
-  | "importar"
   | "gastos"
   | "mermas"
-  | "diferidos"
   | "mensual"
-  | "pnl"
-  | "presupuesto";
+  | "pnl";
 
 type SyncResult = {
   date: string;
@@ -44,13 +40,10 @@ type SyncResult = {
 const tabs: Array<{ id: TabId; label: string }> = [
   { id: "hoy", label: "Hoy" },
   { id: "resumen", label: "Resumen" },
-  { id: "importar", label: "Importar ventas" },
   { id: "gastos", label: "Gastos" },
   { id: "mermas", label: "Mermas" },
-  { id: "diferidos", label: "TC / Diferidos" },
   { id: "mensual", label: "Mensual" },
-  { id: "pnl", label: "P&L anual" },
-  { id: "presupuesto", label: "Presupuesto" }
+  { id: "pnl", label: "P&L anual" }
 ];
 
 export function FinancePage() {
@@ -153,7 +146,6 @@ export function FinancePage() {
           data={data}
           pending={sync.isPending || syncHistory.isPending}
           historyPending={syncHistory.isPending}
-          onOpenImport={() => setActiveTab("importar")}
           onSyncHistory={() => syncHistory.mutate()}
           onSync={() => sync.mutate(date)}
         />
@@ -176,20 +168,10 @@ export function FinancePage() {
         <>
           {activeTab === "hoy" ? <TodayView data={data} /> : null}
           {activeTab === "resumen" ? <SummaryView data={data} /> : null}
-          {activeTab === "importar" ? (
-            <ImportView
-              date={date}
-              onDate={setDate}
-              sync={sync}
-              credentialsConfigured={data.credentialsConfigured}
-            />
-          ) : null}
           {activeTab === "gastos" ? <ExpensesView data={data} /> : null}
           {activeTab === "mermas" ? <WasteFinanceView data={data} /> : null}
-          {activeTab === "diferidos" ? <PlaceholderView title="TC / Diferidos" /> : null}
           {activeTab === "mensual" ? <MonthlyView data={data} /> : null}
           {activeTab === "pnl" ? <PnlView data={data} /> : null}
-          {activeTab === "presupuesto" ? <PlaceholderView title="Presupuesto" /> : null}
         </>
       ) : null}
     </section>
@@ -263,14 +245,12 @@ function SyncPanel({
   data,
   pending,
   historyPending,
-  onOpenImport,
   onSyncHistory,
   onSync
 }: {
   data: FinanceDashboard | undefined;
   pending: boolean;
   historyPending: boolean;
-  onOpenImport: () => void;
   onSyncHistory: () => void;
   onSync: () => void;
 }) {
@@ -296,9 +276,6 @@ function SyncPanel({
         type="button"
       >
         {historyPending ? "Sincronizando historial..." : "Sincronizar historial"}
-      </button>
-      <button className="secondary-button" onClick={onOpenImport} type="button">
-        Importar fecha
       </button>
       <button className="secondary-button" disabled={!connected || pending} onClick={onSync} type="button">
         Sincronizar ahora
@@ -399,55 +376,6 @@ function MonthlyView({ data }: { data: FinanceDashboard }) {
   );
 }
 
-function ImportView({
-  date,
-  onDate,
-  sync,
-  credentialsConfigured
-}: {
-  date: string;
-  onDate: (value: string) => void;
-  sync: UseMutationResult<SyncResult, Error, string>;
-  credentialsConfigured: boolean;
-}) {
-  return (
-    <section className="content-band">
-      <h2>
-        <CalendarSync size={18} aria-hidden="true" />
-        Importar ventas y mermas
-      </h2>
-      <div className="sync-form">
-        <label>
-          Fecha
-          <input type="date" value={date} onChange={(event) => onDate(event.target.value)} />
-        </label>
-        <button
-          className="primary-button"
-          disabled={sync.isPending || !credentialsConfigured}
-          onClick={() => sync.mutate(date)}
-          type="button"
-        >
-          <CalendarSync size={18} aria-hidden="true" />
-          {sync.isPending ? "Sincronizando..." : "Tomar datos desde Dulce Hora"}
-        </button>
-      </div>
-      {!credentialsConfigured ? (
-        <p className="form-error">Faltan credenciales del panel en el backend local.</p>
-      ) : null}
-      {sync.error ? <p className="form-error">{sync.error.message}</p> : null}
-      {sync.data ? (
-        <div className="sync-result">
-          <strong>Sincronizacion terminada</strong>
-          <span>{sync.data.recordsReceived} comprobantes</span>
-          <span>{sync.data.recordsCreated} nuevos</span>
-          <span>{sync.data.recordsUpdated} actualizados</span>
-          <span>{sync.data.wasteRecordsReceived} mermas</span>
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
 function ExpensesView({ data }: { data: FinanceDashboard }) {
   const month = data.monthlyRows.find((row) => row.month === data.month);
   return (
@@ -519,15 +447,6 @@ function PnlView({ data }: { data: FinanceDashboard }) {
     <section className="content-band">
       <h2>P&L anual</h2>
       <MonthlyTable rows={data.monthlyRows} />
-    </section>
-  );
-}
-
-function PlaceholderView({ title }: { title: string }) {
-  return (
-    <section className="content-band">
-      <h2>{title}</h2>
-      <DashedEmpty text="Seccion preparada para activar cuando existan datos configurados." />
     </section>
   );
 }

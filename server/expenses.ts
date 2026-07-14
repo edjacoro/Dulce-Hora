@@ -27,6 +27,9 @@ type ParsedExpense = {
 };
 
 type PaymentType = "cash" | "bank" | "virtual" | "posnet" | "credit_card" | "deferred" | "other";
+type CashAccount = "cash" | "pedidosya" | "rappi" | "mercado_pago" | "banco_provincia";
+
+const cashAccountSchema = z.enum(["cash", "pedidosya", "rappi", "mercado_pago", "banco_provincia"]);
 
 const DEFAULT_EXPENSES_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/1mYOoGvqmee5CT1XF6xllwK-4FFp74iFU/export?format=xlsx";
@@ -59,7 +62,8 @@ const expenseInputSchema = z.object({
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional()
-    .nullable()
+    .nullable(),
+  cashAccount: cashAccountSchema.optional().nullable()
 });
 
 const markPaidSchema = z.object({
@@ -67,7 +71,12 @@ const markPaidSchema = z.object({
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional()
-    .default(() => todayArgentina())
+    .default(() => todayArgentina()),
+  cashAccount: cashAccountSchema.optional().nullable()
+});
+
+const cashAccountUpdateSchema = z.object({
+  cashAccount: cashAccountSchema.nullable()
 });
 
 const investorInputSchema = z.object({
@@ -86,7 +95,8 @@ const withdrawalInputSchema = z.object({
   amount: z.number().positive(),
   status: z.enum(["paid", "pending"]).optional().default("paid"),
   paymentMethod: z.string().trim().max(80).optional().default(""),
-  notes: z.string().trim().max(500).optional().default("")
+  notes: z.string().trim().max(500).optional().default(""),
+  cashAccount: cashAccountSchema.optional().nullable()
 });
 
 const expenseImportSchema = z.object({
@@ -127,6 +137,7 @@ export function registerExpenseRoutes(app: Express) {
               e.deferred,
               e.paid_date::text as paid_date,
               e.due_date::text as due_date,
+              e.cash_account,
               e.source,
               e.external_id,
               e.created_at,
@@ -224,8 +235,8 @@ export function registerExpenseRoutes(app: Express) {
       `insert into expenses
         (id, branch_id, expense_date, category_id, supplier, description, amount,
          payment_method, deferred, due_date, source, external_id, created_by, status,
-         accounting_month, paid_date, payment_type)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual', null, $11, $12, $13, $14, $15)`,
+         accounting_month, paid_date, payment_type, cash_account)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual', null, $11, $12, $13, $14, $15, $16)`,
       [
         id,
         branch.id,
@@ -241,7 +252,8 @@ export function registerExpenseRoutes(app: Express) {
         input.status,
         prepared.accountingMonth,
         prepared.paidDate,
-        prepared.paymentType
+        prepared.paymentType,
+        prepared.cashAccount
       ]
     );
 
@@ -278,8 +290,9 @@ export function registerExpenseRoutes(app: Express) {
            status = $9,
            accounting_month = $10,
            paid_date = $11,
-           payment_type = $12
-       where id = $13`,
+           payment_type = $12,
+           cash_account = $13
+       where id = $14`,
       [
         input.expenseDate,
         categoryId,
@@ -293,6 +306,7 @@ export function registerExpenseRoutes(app: Express) {
         prepared.accountingMonth,
         prepared.paidDate,
         prepared.paymentType,
+        prepared.cashAccount,
         req.params.id
       ]
     );
@@ -306,13 +320,35 @@ export function registerExpenseRoutes(app: Express) {
       `update expenses e
        set status = 'paid',
            paid_date = $1,
-           deferred = false
+           deferred = false,
+           cash_account = coalesce($4, e.cash_account)
        from branches b
        where b.id = e.branch_id
          and e.id = $2
          and b.organization_id = $3
        returning e.id`,
-      [input.paidDate, req.params.id, req.user!.organization_id]
+      [input.paidDate, req.params.id, req.user!.organization_id, input.cashAccount ?? null]
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: "Gasto no encontrado" });
+      return;
+    }
+
+    res.json({ ok: true });
+  });
+
+  app.patch("/api/expenses/:id/cash-account", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
+    const input = cashAccountUpdateSchema.parse(req.body ?? {});
+    const result = await db.query<{ id: string }>(
+      `update expenses e
+       set cash_account = $1
+       from branches b
+       where b.id = e.branch_id
+         and e.id = $2
+         and b.organization_id = $3
+       returning e.id`,
+      [input.cashAccount, req.params.id, req.user!.organization_id]
     );
 
     if (result.rows.length === 0) {
@@ -367,6 +403,7 @@ export function registerExpenseRoutes(app: Express) {
               pw.status,
               pw.payment_method,
               pw.notes,
+              pw.cash_account,
               i.id as investor_id,
               i.name as investor_name,
               i.ownership_percent::text as ownership_percent
@@ -430,8 +467,8 @@ export function registerExpenseRoutes(app: Express) {
     const id = randomUUID();
     await db.query(
       `insert into profit_withdrawals
-        (id, branch_id, investor_id, withdrawal_month, withdrawal_date, amount, status, payment_method, notes)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        (id, branch_id, investor_id, withdrawal_month, withdrawal_date, amount, status, payment_method, notes, cash_account)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         id,
         branch.id,
@@ -441,7 +478,8 @@ export function registerExpenseRoutes(app: Express) {
         input.amount,
         input.status,
         input.paymentMethod || null,
-        input.notes || null
+        input.notes || null,
+        input.cashAccount ?? defaultCashAccountForPayment(input.paymentMethod, "bank")
       ]
     );
 
@@ -536,8 +574,9 @@ export function registerExpenseRoutes(app: Express) {
                  due_date = $8,
                  accounting_month = $9,
                  paid_date = $10,
-                 payment_type = $11
-             where id = $12`,
+                 payment_type = $11,
+                 cash_account = $12
+             where id = $13`,
             [
               row.expenseDate,
               categoryId,
@@ -550,6 +589,7 @@ export function registerExpenseRoutes(app: Express) {
               prepared.accountingMonth,
               prepared.paidDate,
               prepared.paymentType,
+              prepared.cashAccount,
               existing.rows[0].id
             ]
           );
@@ -562,9 +602,9 @@ export function registerExpenseRoutes(app: Express) {
           `insert into expenses
             (id, branch_id, expense_date, category_id, supplier, description, amount,
              payment_method, deferred, due_date, source, external_id, created_by, status,
-             accounting_month, paid_date, payment_type)
+             accounting_month, paid_date, payment_type, cash_account)
            values ($1, $2, $3, $4, null, $5, $6, $7, $8, $9,
-             'google-sheet-expenses', $10, $11, $12, $13, $14, $15)`,
+             'google-sheet-expenses', $10, $11, $12, $13, $14, $15, $16)`,
           [
             randomUUID(),
             branch.id,
@@ -580,7 +620,8 @@ export function registerExpenseRoutes(app: Express) {
             row.status,
             prepared.accountingMonth,
             prepared.paidDate,
-            prepared.paymentType
+            prepared.paymentType,
+            prepared.cashAccount
           ]
         );
       }
@@ -660,7 +701,8 @@ function prepareExpenseInput(input: z.infer<typeof expenseInputSchema>) {
     paymentType,
     paymentMethod: input.paymentMethod || defaultPaymentMethod(paymentType),
     deferred: status === "pending" || input.deferred || isCreditCard || isDeferred,
-    dueDate
+    dueDate,
+    cashAccount: input.cashAccount ?? defaultCashAccountForPayment(input.paymentMethod, paymentType)
   };
 }
 
@@ -674,8 +716,18 @@ function prepareImportedExpense(input: ParsedExpense) {
     paymentType: input.paymentType,
     paymentMethod: input.paymentMethod || defaultPaymentMethod(input.paymentType),
     deferred: input.status === "pending" || input.paymentType === "credit_card" || input.paymentType === "deferred",
-    dueDate
+    dueDate,
+    cashAccount: defaultCashAccountForPayment(input.paymentMethod, input.paymentType)
   };
+}
+
+function defaultCashAccountForPayment(paymentMethod: string | null | undefined, paymentType: PaymentType | "bank"): CashAccount {
+  const value = normalize(`${paymentMethod ?? ""} ${paymentType}`);
+  if (value.includes("efectivo") || paymentType === "cash") return "cash";
+  if (value.includes("mercado") || value.includes("mp") || paymentType === "virtual") return "mercado_pago";
+  if (value.includes("rappi")) return "rappi";
+  if (value.includes("pedido")) return "pedidosya";
+  return "banco_provincia";
 }
 
 async function resolveExpenseCategory(

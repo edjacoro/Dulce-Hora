@@ -1,4 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
+import { Pool } from "pg";
 import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,12 +8,77 @@ import { loadLocalEnv } from "./env.js";
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 loadLocalEnv(rootDir);
 
-const dataDir = process.env.DATA_DIR ?? join(rootDir, "data", "pglite");
+type QueryResult<T> = {
+  rows: T[];
+};
+
+type Queryable = {
+  query<T = unknown>(sql: string, params?: unknown[]): Promise<QueryResult<T>>;
+  exec(sql: string): Promise<unknown>;
+};
+
+type Database = Queryable & {
+  transaction<T>(callback: (tx: Queryable) => Promise<T>): Promise<T>;
+};
+
+const defaultDataDir = process.env.NETLIFY === "true"
+  ? join("/tmp", "dulce-hora-pglite")
+  : join(rootDir, "data", "pglite");
+const dataDir = process.env.DATA_DIR ?? defaultDataDir;
 const migrationsDir = join(rootDir, "server", "migrations");
+const databaseUrl = process.env.DATABASE_URL;
 
-mkdirSync(dataDir, { recursive: true });
+function createDatabase(): Database {
+  if (databaseUrl) {
+    const pool = new Pool({
+      connectionString: databaseUrl,
+      ssl: shouldUseSsl(databaseUrl) ? { rejectUnauthorized: false } : undefined
+    });
 
-export const db = new PGlite(dataDir);
+    return {
+      async query<T = unknown>(sql: string, params: unknown[] = []) {
+        const result = await pool.query(sql, params);
+        return { rows: result.rows as T[] };
+      },
+      async exec(sql: string) {
+        await pool.query(sql);
+      },
+      async transaction<T>(callback: (tx: Queryable) => Promise<T>) {
+        const client = await pool.connect();
+        const tx: Queryable = {
+          async query<T = unknown>(sql: string, params: unknown[] = []) {
+            const result = await client.query(sql, params);
+            return { rows: result.rows as T[] };
+          },
+          async exec(sql: string) {
+            await client.query(sql);
+          }
+        };
+
+        try {
+          await client.query("begin");
+          const result = await callback(tx);
+          await client.query("commit");
+          return result;
+        } catch (error) {
+          await client.query("rollback");
+          throw error;
+        } finally {
+          client.release();
+        }
+      }
+    };
+  }
+
+  mkdirSync(dataDir, { recursive: true });
+  return new PGlite(dataDir) as unknown as Database;
+}
+
+function shouldUseSsl(url: string) {
+  return process.env.PGSSLMODE !== "disable" && !url.includes("localhost") && !url.includes("127.0.0.1");
+}
+
+export const db = createDatabase();
 
 export async function migrate() {
   await db.exec(`

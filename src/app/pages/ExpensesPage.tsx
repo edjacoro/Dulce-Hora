@@ -18,6 +18,7 @@ import {
 import { type Dispatch, type ElementType, type SetStateAction, useMemo, useState } from "react";
 import {
   api,
+  type CashAccountKey,
   type ExpenseCategory,
   type ExpensePaymentType,
   type ExpensesResponse,
@@ -41,6 +42,7 @@ type ExpenseForm = {
   paymentType: ExpensePaymentType;
   status: "paid" | "pending";
   deferred: boolean;
+  cashAccount: CashAccountKey;
   dueDate: string;
   paidDate: string;
 };
@@ -51,6 +53,7 @@ type WithdrawalForm = {
   amount: string;
   status: "paid" | "pending";
   paymentMethod: string;
+  cashAccount: CashAccountKey;
   notes: string;
 };
 
@@ -68,6 +71,7 @@ const emptyForm = (): ExpenseForm => {
     paymentType: "cash",
     status: "paid",
     deferred: false,
+    cashAccount: "cash",
     dueDate: "",
     paidDate: date
   };
@@ -79,6 +83,7 @@ const emptyWithdrawalForm = (): WithdrawalForm => ({
   amount: "",
   status: "paid",
   paymentMethod: "",
+  cashAccount: "cash",
   notes: ""
 });
 
@@ -138,6 +143,15 @@ export function ExpensesPage() {
     onSuccess: async () => refreshExpenses(queryClient)
   });
 
+  const updateExpenseAccount = useMutation({
+    mutationFn: ({ id, cashAccount }: { id: string; cashAccount: CashAccountKey }) =>
+      api<{ ok: true }>(`/api/expenses/${id}/cash-account`, {
+        method: "PATCH",
+        body: JSON.stringify({ cashAccount })
+      }),
+    onSuccess: async () => refreshExpenses(queryClient)
+  });
+
   const deleteExpense = useMutation({
     mutationFn: (id: string) => api<{ ok: true }>(`/api/expenses/${id}`, { method: "DELETE" }),
     onSuccess: async () => refreshExpenses(queryClient)
@@ -168,38 +182,42 @@ export function ExpensesPage() {
     setForm((current) => {
       if (mode === "paid") {
         return {
-          ...current,
-          status: "paid",
-          deferred: false,
-          dueDate: "",
-          paidDate: current.paidDate || current.expenseDate
-        };
+                  ...current,
+                  status: "paid",
+                  deferred: false,
+                  cashAccount: current.cashAccount || defaultCashAccountForPayment(current.paymentType),
+                  dueDate: "",
+                  paidDate: current.paidDate || current.expenseDate
+                };
       }
       if (mode === "credit_card") {
         return {
           ...current,
           status: "pending",
-          deferred: true,
-          paymentType: "credit_card",
-          paymentMethod: "TC",
-          dueDate: nextCreditCardDueDate(current.expenseDate),
-          paidDate: ""
-        };
+                  deferred: true,
+                  paymentType: "credit_card",
+                  paymentMethod: "TC",
+                  cashAccount: "banco_provincia",
+                  dueDate: nextCreditCardDueDate(current.expenseDate),
+                  paidDate: ""
+                };
       }
       if (mode === "deferred") {
         return {
           ...current,
           status: "pending",
-          deferred: true,
-          paymentType: "deferred",
-          paymentMethod: current.paymentMethod || "Diferido",
-          paidDate: ""
-        };
+                  deferred: true,
+                  paymentType: "deferred",
+                  paymentMethod: current.paymentMethod || "Diferido",
+                  cashAccount: current.cashAccount || "banco_provincia",
+                  paidDate: ""
+                };
       }
       return {
         ...current,
         status: "pending",
         deferred: true,
+        cashAccount: current.cashAccount || defaultCashAccountForPayment(current.paymentType),
         paidDate: ""
       };
     });
@@ -333,6 +351,7 @@ export function ExpensesPage() {
                     ...current,
                     paymentType,
                     paymentMethod: defaultPaymentMethod(paymentType),
+                    cashAccount: defaultCashAccountForPayment(paymentType),
                     status: paymentType === "credit_card" || paymentType === "deferred" ? "pending" : current.status,
                     deferred: paymentType === "credit_card" || paymentType === "deferred" || current.status === "pending",
                     dueDate: paymentType === "credit_card" ? nextCreditCardDueDate(current.expenseDate) : current.dueDate,
@@ -348,6 +367,13 @@ export function ExpensesPage() {
                 <option value="deferred">Pago diferido</option>
                 <option value="other">Otro</option>
               </select>
+            </label>
+            <label>
+              Cuenta
+              <AccountSelect
+                value={form.cashAccount}
+                onChange={(cashAccount) => updateForm(setForm, "cashAccount", cashAccount)}
+              />
             </label>
             <div className="payment-quick-actions full">
               <button className="secondary-button compact" onClick={() => applyQuickMode("paid")} type="button">
@@ -430,6 +456,7 @@ export function ExpensesPage() {
                   <th>Categoria</th>
                   <th>Descripcion</th>
                   <th>Pago / vence</th>
+                  <th>Cuenta</th>
                   <th>Estado</th>
                   <th>Monto</th>
                   <th></th>
@@ -452,6 +479,24 @@ export function ExpensesPage() {
                         <span className="cell-muted">
                           {expense.status === "paid" ? `Pago ${expense.paid_date ?? "-"}` : `Vence ${expense.due_date ?? "sin fecha"}`}
                         </span>
+                      </td>
+                      <td>
+                        <select
+                          className="inline-select"
+                          value={expense.cash_account ?? defaultCashAccountForPayment(expense.payment_type)}
+                          onChange={(event) =>
+                            updateExpenseAccount.mutate({
+                              id: expense.id,
+                              cashAccount: event.target.value as CashAccountKey
+                            })
+                          }
+                        >
+                          {cashAccountOptions.map((account) => (
+                            <option value={account.key} key={account.key}>
+                              {account.label}
+                            </option>
+                          ))}
+                        </select>
                       </td>
                       <td>
                         <span className={`signal-pill ${overdue ? "red" : expense.status === "pending" ? "amber" : "green"}`}>
@@ -519,6 +564,7 @@ export function ExpensesPage() {
               amount,
               status: withdrawalForm.status,
               paymentMethod: withdrawalForm.paymentMethod,
+              cashAccount: withdrawalForm.cashAccount,
               notes: withdrawalForm.notes
             });
           }}
@@ -573,6 +619,13 @@ export function ExpensesPage() {
             />
           </label>
           <label>
+            Cuenta
+            <AccountSelect
+              value={withdrawalForm.cashAccount}
+              onChange={(cashAccount) => updateWithdrawalForm(setWithdrawalForm, "cashAccount", cashAccount)}
+            />
+          </label>
+          <label>
             Observacion
             <input value={withdrawalForm.notes} onChange={(event) => updateWithdrawalForm(setWithdrawalForm, "notes", event.target.value)} />
           </label>
@@ -596,6 +649,7 @@ export function ExpensesPage() {
                   <th>Participacion</th>
                   <th>Estado</th>
                   <th>Forma</th>
+                  <th>Cuenta</th>
                   <th>Monto</th>
                   <th></th>
                 </tr>
@@ -615,6 +669,7 @@ export function ExpensesPage() {
                       </span>
                     </td>
                     <td>{withdrawal.payment_method ?? "-"}</td>
+                    <td>{cashAccountLabel(withdrawal.cash_account ?? "banco_provincia")}</td>
                     <td>{formatCurrency(Number(withdrawal.amount))}</td>
                     <td>
                       <button
@@ -699,6 +754,26 @@ function BarList({ rows }: { rows: Array<{ label: string; total: string; records
   );
 }
 
+const cashAccountOptions: Array<{ key: CashAccountKey; label: string }> = [
+  { key: "cash", label: "Efectivo" },
+  { key: "pedidosya", label: "Cuenta Pedidos Ya" },
+  { key: "rappi", label: "Cuenta Rappi" },
+  { key: "mercado_pago", label: "Mercado Pago" },
+  { key: "banco_provincia", label: "Banco Provincia" }
+];
+
+function AccountSelect({ value, onChange }: { value: CashAccountKey; onChange: (value: CashAccountKey) => void }) {
+  return (
+    <select value={value} onChange={(event) => onChange(event.target.value as CashAccountKey)}>
+      {cashAccountOptions.map((account) => (
+        <option value={account.key} key={account.key}>
+          {account.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function buildExpensePayload(form: ExpenseForm, amount: number) {
   return {
     expenseDate: form.expenseDate,
@@ -712,6 +787,7 @@ function buildExpensePayload(form: ExpenseForm, amount: number) {
     paymentType: form.paymentType,
     status: form.status,
     deferred: form.deferred,
+    cashAccount: form.cashAccount,
     dueDate: form.status === "pending" ? form.dueDate || null : null,
     paidDate: form.status === "paid" ? form.paidDate || form.expenseDate : null
   };
@@ -737,14 +813,16 @@ async function refreshExpenses(queryClient: ReturnType<typeof useQueryClient>) {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ["expenses"] }),
     queryClient.invalidateQueries({ queryKey: ["expense-categories"] }),
-    queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] })
+    queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
+    queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] })
   ]);
 }
 
 async function refreshWithdrawals(queryClient: ReturnType<typeof useQueryClient>) {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ["profit-withdrawals"] }),
-    queryClient.invalidateQueries({ queryKey: ["investors"] })
+    queryClient.invalidateQueries({ queryKey: ["investors"] }),
+    queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] })
   ]);
 }
 
@@ -801,6 +879,23 @@ function defaultPaymentMethod(value: ExpensePaymentType) {
     other: "Otro"
   };
   return labels[value];
+}
+
+function defaultCashAccountForPayment(value: ExpensePaymentType): CashAccountKey {
+  const accounts: Record<ExpensePaymentType, CashAccountKey> = {
+    cash: "cash",
+    bank: "mercado_pago",
+    virtual: "mercado_pago",
+    posnet: "banco_provincia",
+    credit_card: "banco_provincia",
+    deferred: "banco_provincia",
+    other: "cash"
+  };
+  return accounts[value];
+}
+
+function cashAccountLabel(value: CashAccountKey) {
+  return cashAccountOptions.find((account) => account.key === value)?.label ?? value;
 }
 
 function formatCurrency(value: number) {

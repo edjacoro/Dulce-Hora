@@ -18,8 +18,9 @@ import { registerExpenseRoutes } from "./expenses.js";
 import { registerFinanceRoutes } from "./finance.js";
 import { registerScheduleRoutes } from "./schedule.js";
 
-const app = express();
+export const app = express();
 const port = Number(process.env.PORT ?? 8787);
+let migrationPromise: Promise<void> | null = null;
 
 app.use(express.json({ limit: "5mb" }));
 app.use(attachUser);
@@ -56,6 +57,7 @@ const portalSalesImportSchema = z.object({
       z.object({
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         provider: z.enum(["pedidosya", "rappi", "otro"]),
+        paymentKind: z.enum(["online", "cash"]).optional().default("online"),
         total: z.number().positive(),
         orders: z.number().int().positive().max(1000),
         hour: z
@@ -68,6 +70,18 @@ const portalSalesImportSchema = z.object({
     )
     .min(1)
     .max(200)
+});
+const corporateSaleSchema = z.object({
+  saleDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  saleTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .optional()
+    .nullable(),
+  customerName: z.string().trim().max(180).optional().default(""),
+  total: z.number().positive(),
+  paymentMethod: z.enum(["efectivo", "virtual", "credito", "debito", "otro"]).optional().default("virtual"),
+  notes: z.string().trim().max(500).optional().default("")
 });
 
 type DateRange = {
@@ -404,12 +418,18 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
   addDateRangeFilter(filters, params, "sd.sale_date", range);
   const where = filters.join(" and ");
   const netTotal = "case when sd.status = 'credit_note' then -abs(sd.total) else sd.total end";
-  const paymentLabel = `case lower(coalesce(nullif(sd.payment_method, ''), 'Sin dato'))
-        when 'virtual' then 'Transferencias'
-        when 'credito' then 'Posnet'
-        when 'debito' then 'Cuenta DNI'
-        when 'efectivo' then 'efectivo'
-        when 'pedidosya' then 'Pedidos Ya'
+  const paymentLabel = `case
+        when lower(coalesce(sd.raw_data->>'provider', '')) = 'rappi'
+          or lower(coalesce(sd.raw_data->>'providerLabel', '')) like '%rappi%'
+          or lower(coalesce(sd.payment_method, '')) like '%rappi%' then 'Rappi'
+        when lower(coalesce(sd.raw_data->>'provider', '')) in ('pedidosya', 'pedidos ya')
+          or lower(coalesce(sd.raw_data->>'providerLabel', '')) like '%pedido%'
+          or lower(coalesce(sd.payment_method, '')) like '%pedido%' then 'Pedidos Ya'
+        when lower(coalesce(nullif(sd.payment_method, ''), 'Sin dato')) = 'virtual' then 'Transferencias'
+        when lower(coalesce(nullif(sd.payment_method, ''), 'Sin dato')) = 'credito' then 'Posnet'
+        when lower(coalesce(nullif(sd.payment_method, ''), 'Sin dato')) = 'debito' then 'Cuenta DNI'
+        when lower(coalesce(nullif(sd.payment_method, ''), 'Sin dato')) = 'efectivo' then 'efectivo'
+        when lower(coalesce(nullif(sd.payment_method, ''), 'Sin dato')) = 'multiple' then 'Mixto Dulce Hora'
         else coalesce(nullif(sd.payment_method, ''), 'Sin dato')
       end`;
 
@@ -516,6 +536,54 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
     byHour: byHour.rows,
     topProducts: topProducts.rows
   });
+});
+
+app.post("/api/sales/corporate", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
+  const input = corporateSaleSchema.parse(req.body ?? {});
+  const branch = await getDefaultBranch(req.user!.organization_id);
+
+  if (!branch) {
+    res.status(400).json({ error: "No hay una sucursal activa para cargar ventas corporativas" });
+    return;
+  }
+
+  const id = randomUUID();
+  const externalId = `corporate:${input.saleDate}:${id}`;
+  const documentNumber = `CORP-${input.saleDate.replaceAll("-", "")}-${id.slice(0, 6).toUpperCase()}`;
+
+  await db.query(
+    `insert into sales_documents
+      (id, branch_id, external_id, dedupe_key, document_number, document_type,
+       sale_date, sale_time, customer_name, subtotal, discount, total, payment_method,
+       status, source, raw_data)
+     values ($1, $2, $3, $3, $4, 'Venta corporativa',
+       $5, $6, $7, $8, 0, $8, $9,
+       'active', 'corporate-manual', $10)`,
+    [
+      id,
+      branch.id,
+      externalId,
+      documentNumber,
+      input.saleDate,
+      input.saleTime || null,
+      input.customerName || null,
+      input.total,
+      input.paymentMethod,
+      JSON.stringify({
+        entryType: "corporate-sale",
+        notes: input.notes || null,
+        customerName: input.customerName || null
+      })
+    ]
+  );
+
+  await audit(req.user!.organization_id, req.user!.id, "sales.corporate.created", "sales_documents", id, null, {
+    saleDate: input.saleDate,
+    total: input.total,
+    paymentMethod: input.paymentMethod
+  });
+
+  res.status(201).json({ id });
 });
 
 app.get("/api/products/performance", requireAuth, async (req, res) => {
@@ -1168,15 +1236,16 @@ app.post(
 
     await db.transaction(async (tx) => {
       for (const row of input.rows) {
-        const prefix = portalExternalPrefix(row.provider, row.date);
+        const prefix = portalExternalPrefix(row.provider, row.date, row.paymentKind);
+        const legacyPrefix = portalLegacyExternalPrefix(row.provider, row.date);
         const existing = await tx.query<{ count: string }>(
           `select count(*)::text as count
            from sales_documents
            where branch_id = $1
              and sale_date = $2
              and source = 'portal-manual'
-             and external_id like $3`,
-          [branch.id, row.date, `${prefix}%`]
+             and (external_id like $3 or ($4::boolean and external_id like $5))`,
+          [branch.id, row.date, `${prefix}%`, row.paymentKind === "online", `${legacyPrefix}%`]
         );
         documentsReplaced += Number(existing.rows[0]?.count ?? 0);
 
@@ -1185,15 +1254,15 @@ app.post(
            where branch_id = $1
              and sale_date = $2
              and source = 'portal-manual'
-             and external_id like $3`,
-          [branch.id, row.date, `${prefix}%`]
+             and (external_id like $3 or ($4::boolean and external_id like $5))`,
+          [branch.id, row.date, `${prefix}%`, row.paymentKind === "online", `${legacyPrefix}%`]
         );
 
         const splitAmounts = splitMoney(row.total, row.orders);
         for (const [index, amount] of splitAmounts.entries()) {
           const documentId = randomUUID();
           const externalId = `${prefix}${String(index + 1).padStart(4, "0")}`;
-          const displayProvider = portalProviderLabel(row.provider);
+          const displayProvider = portalProviderLabel(row.provider, row.paymentKind);
           await tx.query(
             `insert into sales_documents
               (id, branch_id, external_id, dedupe_key, document_number, document_type,
@@ -1214,6 +1283,7 @@ app.post(
               JSON.stringify({
                 importId,
                 provider: row.provider,
+                paymentKind: row.paymentKind,
                 providerLabel: displayProvider,
                 orderIndex: index + 1,
                 orders: row.orders,
@@ -1332,11 +1402,18 @@ app.post(
   }
 );
 
-function portalExternalPrefix(provider: "pedidosya" | "rappi" | "otro", date: string) {
+function portalExternalPrefix(provider: "pedidosya" | "rappi" | "otro", date: string, paymentKind: "online" | "cash") {
+  return `portal-manual:${provider}:${paymentKind}:${date}:`;
+}
+
+function portalLegacyExternalPrefix(provider: "pedidosya" | "rappi" | "otro", date: string) {
   return `portal-manual:${provider}:${date}:`;
 }
 
-function portalProviderLabel(provider: "pedidosya" | "rappi" | "otro") {
+function portalProviderLabel(provider: "pedidosya" | "rappi" | "otro", paymentKind: "online" | "cash") {
+  if (provider === "pedidosya" && paymentKind === "cash") {
+    return "Pedidos Ya efectivo";
+  }
   const labels = {
     pedidosya: "Pedidos Ya",
     rappi: "Rappi",
@@ -1468,8 +1545,18 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
   res.status(500).json({ error: "Error interno" });
 });
 
-await migrate();
+export async function initializeServer() {
+  migrationPromise ??= migrate();
+  await migrationPromise;
+}
 
-app.listen(port, "127.0.0.1", () => {
-  console.log(`Dulce Hora Control API escuchando en http://127.0.0.1:${port}`);
-});
+export async function startServer() {
+  await initializeServer();
+  return app.listen(port, "127.0.0.1", () => {
+    console.log(`Dulce Hora Control API escuchando en http://127.0.0.1:${port}`);
+  });
+}
+
+if (process.env.NETLIFY !== "true" && process.env.DULCE_HORA_SERVERLESS !== "true") {
+  await startServer();
+}
