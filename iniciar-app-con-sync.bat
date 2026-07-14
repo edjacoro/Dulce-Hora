@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0"
 set "PATH=C:\Users\scumm\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin;%PATH%"
+set "APP_ROOT=%~dp0"
+set "DATA_DIR=%~dp0data\pglite-local-runtime"
 
 if "%DULCE_HORA_USERNAME%"=="" (
   set /p DULCE_HORA_USERNAME=Usuario panel Dulce Hora:

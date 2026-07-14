@@ -1,0 +1,1 @@
+$ concurrently -n api,web -c red,blue "tsx watch server/index.ts" "vite --host 127.0.0.1"

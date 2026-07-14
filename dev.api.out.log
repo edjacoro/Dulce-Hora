@@ -1,0 +1,4 @@
+Dulce Hora Control API escuchando en http://127.0.0.1:8787
+01:29:20 [tsx] change in ./server\index.ts Restarting...
+cDulce Hora Control API escuchando en http://127.0.0.1:8787
+[ELIFECYCLE] Command failed with exit code 4294967295.
