@@ -1,11 +1,10 @@
 import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
 import { mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { loadLocalEnv } from "./env.js";
 
-const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
+const rootDir = process.env.APP_ROOT ?? process.cwd();
 loadLocalEnv(rootDir);
 
 type QueryResult<T> = {

@@ -21,6 +21,8 @@ import { registerScheduleRoutes } from "./schedule.js";
 export const app = express();
 const port = Number(process.env.PORT ?? 8787);
 let migrationPromise: Promise<void> | null = null;
+const dulceHoraOwnerEmail = "dulcehoraurquiza@gmail.com";
+const diegoSeedPasswordHash = "$2b$12$SfJRpDgCVuJt9DnJGBqd5.lzy1DBTQkrUtBQSlJO6Keoesf0fti0a";
 
 app.use(express.json({ limit: "5mb" }));
 app.use(attachUser);
@@ -185,6 +187,19 @@ app.post("/api/setup", async (req, res) => {
        values ($1, $2, $3, lower($4), $5, 'owner', true)`,
       [userId, organizationId, input.ownerName, input.ownerEmail, passwordHash]
     );
+
+    if (input.ownerEmail.toLowerCase() === dulceHoraOwnerEmail && input.ownerName.toLowerCase() !== "diego") {
+      await tx.query(
+        `insert into users (id, organization_id, name, email, password_hash, role, active, avatar_url)
+         values ($1, $2, 'Diego', $3, $4, 'owner', true, '/users/diego.png')
+         on conflict (organization_id, email, name)
+         do update set password_hash = excluded.password_hash,
+                       role = excluded.role,
+                       active = excluded.active,
+                       avatar_url = excluded.avatar_url`,
+        [randomUUID(), organizationId, dulceHoraOwnerEmail, diegoSeedPasswordHash]
+      );
+    }
 
     const expenseCategories = [
       ["Materia prima", "cogs"],
@@ -1601,5 +1616,8 @@ export async function startServer() {
 }
 
 if (process.env.NETLIFY !== "true" && process.env.DULCE_HORA_SERVERLESS !== "true") {
-  await startServer();
+  startServer().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
 }
