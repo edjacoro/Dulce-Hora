@@ -16,9 +16,18 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     let payload: ApiError = { error: "No se pudo completar la solicitud" };
     try {
-      payload = (await response.json()) as ApiError;
+      payload = (await response.clone().json()) as ApiError;
     } catch {
-      // Keep the generic message when the server did not return JSON.
+      try {
+        const text = await response.text();
+        if (text.trim()) {
+          payload = {
+            error: `No se pudo completar la solicitud (${response.status}). ${text.trim().slice(0, 240)}`
+          };
+        }
+      } catch {
+        // Keep the generic message when the server did not return readable text.
+      }
     }
     throw new Error(payload.error);
   }

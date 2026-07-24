@@ -21,7 +21,7 @@ export type SyncHistoryResult = SyncResult & {
 };
 
 const defaultHistoryStartDate = "2026-04-17";
-const defaultHistoryChunkDays = 14;
+const defaultHistoryChunkDays = 1;
 
 export async function syncHistoryInChunks(
   onChunk?: (result: SyncHistoryResult, chunk: { from: string; to: string; index: number; total: number }) => void
@@ -31,11 +31,19 @@ export async function syncHistoryInChunks(
 
   for (const [index, chunk] of chunks.entries()) {
     try {
-      const result = await api<SyncHistoryResult>("/api/integration/dulce-hora/sync-history", {
-        method: "POST",
-        body: JSON.stringify({ from: chunk.from, to: chunk.to })
-      });
-      aggregate = mergeHistoryResults(aggregate, result);
+      if (chunk.from === chunk.to) {
+        const result = await api<SyncResult>("/api/integration/dulce-hora/sync-date", {
+          method: "POST",
+          body: JSON.stringify({ date: chunk.from })
+        });
+        aggregate = mergeHistoryResults(aggregate, dateResultToHistory(result));
+      } else {
+        const result = await api<SyncHistoryResult>("/api/integration/dulce-hora/sync-history", {
+          method: "POST",
+          body: JSON.stringify({ from: chunk.from, to: chunk.to })
+        });
+        aggregate = mergeHistoryResults(aggregate, result);
+      }
     } catch (error) {
       const dateLabel = chunk.from === chunk.to ? chunk.from : `${chunk.from} a ${chunk.to}`;
       aggregate.errors.push(`${dateLabel}: ${error instanceof Error ? error.message : "Error desconocido"}`);
@@ -50,6 +58,17 @@ export async function syncHistoryInChunks(
   }
 
   return aggregate;
+}
+
+function dateResultToHistory(result: SyncResult): SyncHistoryResult {
+  const hasData = result.recordsReceived > 0 || result.wasteRecordsReceived > 0;
+  return {
+    ...result,
+    date: "historial",
+    dateFrom: result.date,
+    dateTo: result.date,
+    datesSynced: hasData ? 1 : 0
+  };
 }
 
 function mergeHistoryResults(left: SyncHistoryResult, right: SyncHistoryResult): SyncHistoryResult {

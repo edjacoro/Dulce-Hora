@@ -122,7 +122,7 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
     const statisticsEntries = loaded.statisticsEntries;
 
     if (statisticsEntries.length > 0) {
-      result.recordsReceived = statisticsEntries.length;
+      result.recordsReceived = Math.max(statisticsEntries.length, loaded.registryEntries.length);
 
       for (const detail of statisticsEntries) {
         try {
@@ -136,37 +136,11 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
           result.errors.push(error instanceof Error ? error.message : "Error desconocido");
         }
       }
+
+      await saveLoadedRegistryDocuments(input, result, loaded);
     } else {
       result.recordsReceived = loaded.registryEntries.length;
-
-      for (const document of loaded.registryDocuments) {
-        try {
-          const parsed = parseDocument(document, input.date, loaded.catalog);
-          const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
-          result.recordsCreated += upsert.created ? 1 : 0;
-          result.recordsUpdated += upsert.created ? 0 : 1;
-          result.itemRows += parsed.items.length;
-        } catch (error) {
-          result.recordsRejected += 1;
-          result.errors.push(error instanceof Error ? error.message : "Error desconocido");
-        }
-      }
-
-      for (const entry of loaded.registryFallbackEntries) {
-        const parsed = parseListingDocument(entry, input.date);
-        const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
-        result.recordsCreated += upsert.created ? 1 : 0;
-        result.recordsUpdated += upsert.created ? 0 : 1;
-      }
-
-      if (loaded.registryFallbackEntries.length > 0) {
-        result.errors.push(
-          "Dulce Hora limito temporalmente el detalle de comprobantes; se completo la venta desde el listado."
-        );
-      }
-
-      result.recordsRejected += loaded.registryErrors.length;
-      result.errors.push(...loaded.registryErrors);
+      await saveLoadedRegistryDocuments(input, result, loaded);
     }
 
     const wasteResult = await saveWasteRecords(
@@ -276,42 +250,104 @@ export async function syncDulceHoraHistory(
   }
 }
 
+async function saveLoadedRegistryDocuments(
+  input: SyncInput,
+  result: SyncResult,
+  loaded: LoadedDateData
+) {
+  for (const document of loaded.registryDocuments) {
+    try {
+      const parsed = parseDocument(document, input.date, loaded.catalog);
+      const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
+      result.recordsCreated += upsert.created ? 1 : 0;
+      result.recordsUpdated += upsert.created ? 0 : 1;
+      result.itemRows += parsed.items.length;
+    } catch (error) {
+      result.recordsRejected += 1;
+      result.errors.push(error instanceof Error ? error.message : "Error desconocido");
+    }
+  }
+
+  for (const entry of loaded.registryFallbackEntries) {
+    const parsed = parseListingDocument(entry, input.date);
+    const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
+    result.recordsCreated += upsert.created ? 1 : 0;
+    result.recordsUpdated += upsert.created ? 0 : 1;
+  }
+
+  if (loaded.registryFallbackEntries.length > 0) {
+    result.errors.push(
+      "Dulce Hora limito temporalmente el detalle de algunos comprobantes; se completo la venta desde el listado."
+    );
+  }
+
+  result.recordsRejected += loaded.registryErrors.length;
+  result.errors.push(...loaded.registryErrors);
+}
+
 async function loadDateData(credentials: DulceHoraCredentials, date: string): Promise<LoadedDateData> {
   return withDulceHoraSession(credentials, async (client) => {
     const statistics = await client.fetchStatistics();
     const wastePayload = await client.fetchWasteRecords();
     const catalog = statistics.catalog.size > 0 ? statistics.catalog : await client.fetchCatalog();
     const statisticsEntries = statistics.documents.filter((document) => documentDate(document) === date);
+    const registryEntries = await client.fetchRegistry(date);
     const loaded: LoadedDateData = {
       catalog,
       wastePayload,
       statisticsEntries,
-      registryEntries: [],
+      registryEntries,
       registryDocuments: [],
       registryFallbackEntries: [],
       registryErrors: []
     };
 
-    if (statisticsEntries.length > 0) return loaded;
-
-    loaded.registryEntries = await client.fetchRegistry(date);
-    for (const entry of loaded.registryEntries) {
-      try {
-        loaded.registryDocuments.push(await fetchDocumentWithRetry(client, entry));
-      } catch (error) {
-        if (error instanceof DulceHoraAuthenticationError) {
-          throw error;
-        }
-        if (error instanceof DulceHoraRateLimitError) {
-          loaded.registryFallbackEntries.push(entry);
-          continue;
-        }
-        loaded.registryErrors.push(error instanceof Error ? error.message : "Error desconocido");
-      }
+    if (statisticsEntries.length > 0) {
+      const statisticsKeys = new Set(statisticsEntries.map(statisticsEntryKey));
+      await loadRegistryDetails(client, loaded, registryEntries.filter((entry) => !statisticsKeys.has(registryEntryKey(entry))));
+      return loaded;
     }
+
+    await loadRegistryDetails(client, loaded, registryEntries);
 
     return loaded;
   });
+}
+
+async function loadRegistryDetails(
+  client: DulceHoraClient,
+  loaded: LoadedDateData,
+  entries: RegistryEntry[]
+) {
+  const defaultDetailLimit = process.env.NETLIFY === "true" ? 20 : 60;
+  const detailLimit = Number(process.env.DULCE_HORA_MISSING_DETAIL_LIMIT ?? defaultDetailLimit);
+
+  for (const [index, entry] of entries.entries()) {
+    if (index >= detailLimit) {
+      loaded.registryFallbackEntries.push(entry);
+      continue;
+    }
+    try {
+      loaded.registryDocuments.push(await fetchDocumentWithRetry(client, entry));
+    } catch (error) {
+      if (error instanceof DulceHoraAuthenticationError) {
+        throw error;
+      }
+      if (error instanceof DulceHoraRateLimitError) {
+        loaded.registryFallbackEntries.push(entry);
+        continue;
+      }
+      loaded.registryErrors.push(error instanceof Error ? error.message : "Error desconocido");
+    }
+  }
+}
+
+function registryEntryKey(entry: RegistryEntry) {
+  return `${entry.displayType}:${entry.externalId}`;
+}
+
+function statisticsEntryKey(detail: Record<string, unknown>) {
+  return `${listingTypeFromDetail(detail.tipo)}:${String(detail.id ?? "")}`;
 }
 
 async function withDulceHoraSession<T>(

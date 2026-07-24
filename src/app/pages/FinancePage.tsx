@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type FinanceDailyRow, type FinanceDashboard, type FinanceMonthRow } from "../api";
+import { syncHistoryInChunks } from "../historySync";
 
 type TabId =
   | "hoy"
@@ -79,11 +80,7 @@ export function FinancePage() {
     }
   });
   const syncHistory = useMutation({
-    mutationFn: () =>
-      api<SyncResult>("/api/integration/dulce-hora/sync-history", {
-        method: "POST",
-        body: JSON.stringify({})
-      }),
+    mutationFn: () => syncHistoryInChunks(),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
