@@ -1,6 +1,122 @@
 [web] 
-[web]   [32m[1mVITE[22m v7.3.6[39m  [2mready in [0m[1m1612[22m[2m[0m ms[22m
+[web]   [32m[1mVITE[22m v7.3.6[39m  [2mready in [0m[1m1092[22m[2m[0m ms[22m
 [web] 
 [web]   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
 [web]   [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.0.17:[1m5173[22m/[39m
 [api] Dulce Hora Control API escuchando en http://127.0.0.1:8787
+[api] 02:16:13 [tsx] change in ./server\index.ts Restarting...
+[api] cDulce Hora Control API escuchando en http://127.0.0.1:8787
+[api] 02:16:25 [tsx] change in ./server\dulceHoraSync.ts Restarting...
+[api] cDulce Hora Control API escuchando en http://127.0.0.1:8787
+[api] 02:22:10 [tsx] change in ./server\index.ts Restarting...
+[api] cDulce Hora Control API escuchando en http://127.0.0.1:8787
+[web] [2m02:22:15[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/App.tsx, /src/app/pages/IntegrationPage.tsx, /src/app/pages/DashboardPage.tsx, /src/app/pages/SettingsPage.tsx, /src/app/pages/SetupPage.tsx, /src/app/pages/LoginPage.tsx, /src/app/pages/WastePage.tsx, /src/app/pages/HoursPage.tsx, /src/app/pages/ProductsPage.tsx, /src/app/pages/SalesPage.tsx, /src/app/pages/CashflowPage.tsx, /src/app/pages/EmployeeFilesPage.tsx, /src/app/pages/SchedulePage.tsx, /src/app/pages/ExpensesPage.tsx, /src/app/pages/FinancePage.tsx[22m
+[web] [2m02:22:15[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/App.tsx, /src/app/pages/IntegrationPage.tsx, /src/app/pages/DashboardPage.tsx, /src/app/pages/SettingsPage.tsx, /src/app/pages/SetupPage.tsx, /src/app/pages/LoginPage.tsx, /src/app/pages/WastePage.tsx, /src/app/pages/HoursPage.tsx, /src/app/pages/ProductsPage.tsx, /src/app/pages/SalesPage.tsx, /src/app/pages/CashflowPage.tsx, /src/app/pages/EmployeeFilesPage.tsx, /src/app/pages/SchedulePage.tsx, /src/app/pages/ExpensesPage.tsx, /src/app/pages/FinancePage.tsx[22m
+[web] [2m02:22:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/App.tsx[22m
+[web] [2m09:21:41[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/App.tsx[22m
+[web] [2m09:21:57[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/pages/DashboardPage.tsx[22m
+[web] [2m09:22:15[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[web] [2m09:23:17[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/App.tsx[22m
+[web] [2m09:29:36[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/App.tsx[22m
+[web] [2m09:32:00[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/App.tsx[22m
+[web] [2m09:52:54[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/pages/WastePage.tsx, /src/app/pages/ProductsPage.tsx, /src/app/pages/SalesPage.tsx, /src/app/pages/EmployeeFilesPage.tsx, /src/app/pages/SchedulePage.tsx[22m
+[web] [2m09:52:54[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/pages/WastePage.tsx, /src/app/pages/ProductsPage.tsx, /src/app/pages/SalesPage.tsx, /src/app/pages/EmployeeFilesPage.tsx, /src/app/pages/SchedulePage.tsx[22m
+[api] 11:56:33 [tsx] change in ./server\dulceHoraSync.ts Restarting...
+[api] c
+[web] [2m11:56:46[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/App.tsx, /src/app/pages/IntegrationPage.tsx[22m
+[web] [2m11:56:48[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/setup/status[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:48[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/auth/me[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:48[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/dashboard/overview[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:48[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/schedule?month=2026-07[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:48[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/setup/status[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:48[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/auth/me[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:48[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/dashboard/overview[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:48[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/schedule?month=2026-07[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:49[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/setup/status[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:56[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/app/App.tsx[22m
+[web] [2m11:56:57[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/setup/status[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:57[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/auth/me[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:57[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/dashboard/overview[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:57[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/schedule?month=2026-07[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:57[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/auth/me[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:57[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/dashboard/overview[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:57[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/schedule?month=2026-07[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m11:56:58[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/setup/status[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[api] RuntimeError: Aborted(). Build with -sASSERTIONS for more info.
+[api]     at abort (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\dist\index.js:1:79379)
+[api]     at __abort_js (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\dist\index.js:2:63229)
+[api]     at wasm://wasm/021d3ac6:wasm-function[11084]:0x5b015a
+[api]     at wasm://wasm/021d3ac6:wasm-function[9509]:0x508b38
+[api]     at wasm://wasm/021d3ac6:wasm-function[9689]:0x51a3ff
+[api]     at wasm://wasm/021d3ac6:wasm-function[181]:0x6606c
+[api]     at Object.Module._pgl_backend (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\dist\index.js:3:25358)
+[api]     at L.Ve (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\dist\index.js:3:226289)
+[api]     at async L._checkReady (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\dist\index.js:3:220312)
+[api]     at async L.exec (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\src\base.ts:219:5)
+[api] 11:59:34 [tsx] change in ./server\dulceHoraSync.ts Rerunning...
+[api] cRuntimeError: Aborted(). Build with -sASSERTIONS for more info.
+[api]     at abort (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\dist\index.js:1:79379)
+[api]     at __abort_js (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\dist\index.js:2:63229)
+[api]     at wasm://wasm/021d3ac6:wasm-function[11084]:0x5b015a
+[api]     at wasm://wasm/021d3ac6:wasm-function[9509]:0x508b38
+[api]     at wasm://wasm/021d3ac6:wasm-function[9689]:0x51a3ff
+[api]     at wasm://wasm/021d3ac6:wasm-function[181]:0x6606c
+[api]     at Object.Module._pgl_backend (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\dist\index.js:3:25358)
+[api]     at L.Ve (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\dist\index.js:3:226289)
+[api]     at async L._checkReady (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\dist\index.js:3:220312)
+[api]     at async L.exec (C:\Users\scumm\OneDrive\Documentos\Dulce Hora App\node_modules\.pnpm\@electric-sql+pglite@0.3.16\node_modules\@electric-sql\pglite\src\base.ts:219:5)
+[web] [2m12:02:42[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/integration/dulce-hora/sync-date[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m12:09:42[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/setup/status[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m12:09:42[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/integration/dulce-hora/sync-date[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m12:09:49[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/setup/status[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m12:09:50[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/setup/status[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m12:13:06[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/setup/status[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
+[web] [2m12:13:07[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/setup/status[39m
+[web] Error: connect ECONNREFUSED 127.0.0.1:8787
+[web]     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16)
