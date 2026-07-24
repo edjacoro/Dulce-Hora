@@ -12,6 +12,7 @@ type SyncResult = {
   wasteRecordsCreated: number;
   wasteRecordsUpdated: number;
   errors: string[];
+  warnings?: string[];
 };
 
 export type SyncHistoryResult = SyncResult & {
@@ -24,9 +25,12 @@ const defaultHistoryStartDate = "2026-04-17";
 const defaultHistoryChunkDays = 1;
 
 export async function syncHistoryInChunks(
-  onChunk?: (result: SyncHistoryResult, chunk: { from: string; to: string; index: number; total: number }) => void
+  onChunk?: (result: SyncHistoryResult, chunk: { from: string; to: string; index: number; total: number; label?: string }) => void
 ) {
-  const chunks = dateChunks(historyStartDate(), todayArgentina(), historyChunkDays());
+  const startDate = historyStartDate();
+  const endDate = todayArgentina();
+  const chunks = dateChunks(startDate, endDate, historyChunkDays());
+  const totalSteps = chunks.length + 1;
   let aggregate = emptyHistoryResult();
 
   for (const [index, chunk] of chunks.entries()) {
@@ -34,7 +38,7 @@ export async function syncHistoryInChunks(
       if (chunk.from === chunk.to) {
         const result = await api<SyncResult>("/api/integration/dulce-hora/sync-date", {
           method: "POST",
-          body: JSON.stringify({ date: chunk.from })
+          body: JSON.stringify({ date: chunk.from, includeWaste: false, includeStatistics: false })
         });
         aggregate = mergeHistoryResults(aggregate, dateResultToHistory(result));
       } else {
@@ -48,10 +52,21 @@ export async function syncHistoryInChunks(
       const dateLabel = chunk.from === chunk.to ? chunk.from : `${chunk.from} a ${chunk.to}`;
       aggregate.errors.push(`${dateLabel}: ${error instanceof Error ? error.message : "Error desconocido"}`);
     }
-    onChunk?.(aggregate, { ...chunk, index: index + 1, total: chunks.length });
+    onChunk?.(aggregate, { ...chunk, index: index + 1, total: totalSteps, label: "Ventas" });
   }
 
-  if (aggregate.errors.length >= chunks.length) {
+  try {
+    const wasteResult = await api<SyncHistoryResult>("/api/integration/dulce-hora/sync-waste-history", {
+      method: "POST",
+      body: JSON.stringify({ from: startDate, to: endDate })
+    });
+    aggregate = mergeHistoryResults(aggregate, wasteResult);
+  } catch (error) {
+    aggregate.errors.push(`Mermas: ${error instanceof Error ? error.message : "Error desconocido"}`);
+  }
+  onChunk?.(aggregate, { from: startDate, to: endDate, index: totalSteps, total: totalSteps, label: "Mermas" });
+
+  if (aggregate.errors.length >= totalSteps) {
     throw new Error(
       `No se pudo sincronizar ningun dia del historial de Dulce Hora. ${aggregate.errors.slice(0, 3).join(" | ")}`
     );
@@ -62,12 +77,15 @@ export async function syncHistoryInChunks(
 
 function dateResultToHistory(result: SyncResult): SyncHistoryResult {
   const hasData = result.recordsReceived > 0 || result.wasteRecordsReceived > 0;
+  const warningsFromErrors = result.errors.filter(isWarningMessage);
   return {
     ...result,
     date: "historial",
     dateFrom: result.date,
     dateTo: result.date,
-    datesSynced: hasData ? 1 : 0
+    datesSynced: hasData ? 1 : 0,
+    errors: result.errors.filter((message) => !isWarningMessage(message)),
+    warnings: [...(result.warnings ?? []), ...warningsFromErrors]
   };
 }
 
@@ -86,7 +104,8 @@ function mergeHistoryResults(left: SyncHistoryResult, right: SyncHistoryResult):
     wasteRecordsReceived: left.wasteRecordsReceived + right.wasteRecordsReceived,
     wasteRecordsCreated: left.wasteRecordsCreated + right.wasteRecordsCreated,
     wasteRecordsUpdated: left.wasteRecordsUpdated + right.wasteRecordsUpdated,
-    errors: [...left.errors, ...right.errors]
+    errors: [...left.errors, ...right.errors],
+    warnings: [...(left.warnings ?? []), ...(right.warnings ?? [])]
   };
 }
 
@@ -105,8 +124,17 @@ function emptyHistoryResult(): SyncHistoryResult {
     wasteRecordsReceived: 0,
     wasteRecordsCreated: 0,
     wasteRecordsUpdated: 0,
-    errors: []
+    errors: [],
+    warnings: []
   };
+}
+
+function isWarningMessage(message: string) {
+  return (
+    message.includes("se completo la venta desde el listado") ||
+    message.includes("No se pudo leer estadisticas completas") ||
+    message.includes("No se pudieron leer las mermas en esta pasada")
+  );
 }
 
 function dateChunks(from: string, to: string, size: number) {

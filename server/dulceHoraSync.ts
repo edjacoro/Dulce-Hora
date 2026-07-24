@@ -7,6 +7,7 @@ import {
   getDulceHoraCredentials,
   type DulceHoraCredentials,
   type DulceHoraDocument,
+  type DulceHoraStatisticsPayload,
   type DulceHoraWastePayload,
   type RegistryEntry,
   type ProductCatalogItem
@@ -17,6 +18,8 @@ type SyncInput = {
   organizationId: string;
   userId: string;
   date: string;
+  includeWaste?: boolean;
+  includeStatistics?: boolean;
 };
 
 type ParsedItem = {
@@ -68,6 +71,7 @@ type LoadedDateData = {
   registryDocuments: DulceHoraDocument[];
   registryFallbackEntries: RegistryEntry[];
   registryErrors: string[];
+  warnings: string[];
 };
 
 export type SyncResult = {
@@ -82,6 +86,7 @@ export type SyncResult = {
   wasteRecordsCreated: number;
   wasteRecordsUpdated: number;
   errors: string[];
+  warnings: string[];
 };
 
 export type SyncHistoryResult = SyncResult & {
@@ -114,11 +119,16 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
     wasteRecordsReceived: 0,
     wasteRecordsCreated: 0,
     wasteRecordsUpdated: 0,
-    errors: []
+    errors: [],
+    warnings: []
   };
 
   try {
-    const loaded = await loadDateData(credentials, input.date);
+    const loaded = await loadDateData(credentials, input.date, {
+      includeWaste: input.includeWaste ?? true,
+      includeStatistics: input.includeStatistics
+    });
+    result.warnings.push(...loaded.warnings);
     const statisticsEntries = loaded.statisticsEntries;
 
     if (statisticsEntries.length > 0) {
@@ -193,7 +203,8 @@ export async function syncDulceHoraHistory(
     wasteRecordsReceived: 0,
     wasteRecordsCreated: 0,
     wasteRecordsUpdated: 0,
-    errors: []
+    errors: [],
+    warnings: []
   };
 
   try {
@@ -250,6 +261,71 @@ export async function syncDulceHoraHistory(
   }
 }
 
+export async function syncDulceHoraWasteHistory(
+  input: Omit<SyncInput, "date"> & { dateFrom?: string | null; dateTo?: string | null }
+): Promise<SyncHistoryResult> {
+  const credentials = getDulceHoraCredentials();
+  if (!credentials) {
+    throw new Error("Faltan DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en el entorno del backend");
+  }
+
+  const runId = randomUUID();
+  await db.query(
+    `insert into sync_runs (id, branch_id, integration, status)
+     values ($1, $2, 'dulce-hora-waste-history', 'running')`,
+    [runId, input.branchId]
+  );
+
+  const result: SyncHistoryResult = {
+    runId,
+    date: "historial",
+    dateFrom: null,
+    dateTo: null,
+    datesSynced: 0,
+    recordsReceived: 0,
+    recordsCreated: 0,
+    recordsUpdated: 0,
+    recordsRejected: 0,
+    itemRows: 0,
+    wasteRecordsReceived: 0,
+    wasteRecordsCreated: 0,
+    wasteRecordsUpdated: 0,
+    errors: [],
+    warnings: []
+  };
+
+  try {
+    const wastePayload = await withDulceHoraSession(credentials, (client) => client.fetchWasteRecords());
+    const dates = [...new Set(wasteDates(wastePayload))]
+      .filter((date) => (!input.dateFrom || date >= input.dateFrom) && (!input.dateTo || date <= input.dateTo))
+      .sort();
+    result.dateFrom = dates[0] ?? input.dateFrom ?? null;
+    result.dateTo = dates.at(-1) ?? input.dateTo ?? null;
+
+    for (const date of dates) {
+      const wasteResult = await saveWasteRecords(
+        input.organizationId,
+        input.branchId,
+        date,
+        wastePayload
+      );
+      result.wasteRecordsReceived += wasteResult.received;
+      result.wasteRecordsCreated += wasteResult.created;
+      result.wasteRecordsUpdated += wasteResult.updated;
+      if (wasteResult.received > 0) result.datesSynced += 1;
+    }
+
+    await finishRun(runId, "success", result);
+    await auditSync(input.organizationId, input.userId, runId, result);
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Error desconocido";
+    result.errors.push(message);
+    await finishRun(runId, "failed", result, message);
+    throw error;
+  }
+}
+
 async function saveLoadedRegistryDocuments(
   input: SyncInput,
   result: SyncResult,
@@ -276,7 +352,7 @@ async function saveLoadedRegistryDocuments(
   }
 
   if (loaded.registryFallbackEntries.length > 0) {
-    result.errors.push(
+    result.warnings.push(
       "Dulce Hora limito temporalmente el detalle de algunos comprobantes; se completo la venta desde el listado."
     );
   }
@@ -285,13 +361,23 @@ async function saveLoadedRegistryDocuments(
   result.errors.push(...loaded.registryErrors);
 }
 
-async function loadDateData(credentials: DulceHoraCredentials, date: string): Promise<LoadedDateData> {
+async function loadDateData(
+  credentials: DulceHoraCredentials,
+  date: string,
+  options: { includeWaste: boolean; includeStatistics?: boolean }
+): Promise<LoadedDateData> {
   return withDulceHoraSession(credentials, async (client) => {
-    const statistics = await client.fetchStatistics();
-    const wastePayload = await client.fetchWasteRecords();
-    const catalog = statistics.catalog.size > 0 ? statistics.catalog : await client.fetchCatalog();
-    const statisticsEntries = statistics.documents.filter((document) => documentDate(document) === date);
+    const warnings: string[] = [];
+    const includeStatistics = options.includeStatistics ?? !isServerlessRuntime();
     const registryEntries = await client.fetchRegistry(date);
+    const statistics = includeStatistics ? await fetchStatisticsSafely(client, warnings) : null;
+    const wastePayload = options.includeWaste
+      ? await fetchWastePayloadSafely(client, warnings)
+      : emptyWastePayload();
+    const catalog = statistics
+      ? await catalogFromStatistics(client, statistics, warnings)
+      : new Map<string, ProductCatalogItem>();
+    const statisticsEntries = statistics?.documents.filter((document) => documentDate(document) === date) ?? [];
     const loaded: LoadedDateData = {
       catalog,
       wastePayload,
@@ -299,8 +385,14 @@ async function loadDateData(credentials: DulceHoraCredentials, date: string): Pr
       registryEntries,
       registryDocuments: [],
       registryFallbackEntries: [],
-      registryErrors: []
+      registryErrors: [],
+      warnings
     };
+
+    if (!includeStatistics) {
+      loaded.registryFallbackEntries.push(...registryEntries);
+      return loaded;
+    }
 
     if (statisticsEntries.length > 0) {
       const statisticsKeys = new Set(statisticsEntries.map(statisticsEntryKey));
@@ -312,6 +404,57 @@ async function loadDateData(credentials: DulceHoraCredentials, date: string): Pr
 
     return loaded;
   });
+}
+
+async function fetchStatisticsSafely(
+  client: DulceHoraClient,
+  warnings: string[]
+): Promise<DulceHoraStatisticsPayload | null> {
+  try {
+    return await client.fetchStatistics();
+  } catch (error) {
+    if (!isServerlessRuntime()) throw error;
+    warnings.push(
+      "No se pudo leer estadisticas completas de Dulce Hora; se completo la venta desde el listado diario."
+    );
+    return null;
+  }
+}
+
+async function catalogFromStatistics(
+  client: DulceHoraClient,
+  statistics: DulceHoraStatisticsPayload,
+  warnings: string[]
+) {
+  if (statistics.catalog.size > 0) return statistics.catalog;
+  try {
+    return await client.fetchCatalog();
+  } catch (error) {
+    if (!isServerlessRuntime()) throw error;
+    warnings.push(
+      "No se pudo leer el catalogo completo de Dulce Hora; los productos se completaran en una sincronizacion posterior."
+    );
+    return new Map<string, ProductCatalogItem>();
+  }
+}
+
+async function fetchWastePayloadSafely(client: DulceHoraClient, warnings: string[]) {
+  try {
+    return await client.fetchWasteRecords();
+  } catch (error) {
+    if (!isServerlessRuntime()) throw error;
+    warnings.push(
+      "No se pudieron leer las mermas en esta pasada; ventas quedo sincronizado y mermas se puede reintentar aparte."
+    );
+    return emptyWastePayload();
+  }
+}
+
+function emptyWastePayload(): DulceHoraWastePayload {
+  return {
+    products: new Map(),
+    events: []
+  };
 }
 
 async function loadRegistryDetails(

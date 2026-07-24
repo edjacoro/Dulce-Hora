@@ -38,6 +38,7 @@ type SyncResult = {
   wasteRecordsCreated: number;
   wasteRecordsUpdated: number;
   errors: string[];
+  warnings?: string[];
 };
 
 type PortalProvider = "pedidosya" | "rappi" | "otro";
@@ -67,7 +68,7 @@ export function IntegrationPage() {
   const [date, setDate] = useState(() => todayArgentina());
   const [historyProgress, setHistoryProgress] = useState<{
     result: SyncHistoryResult;
-    chunk: { from: string; to: string; index: number; total: number };
+    chunk: { from: string; to: string; index: number; total: number; label?: string };
   } | null>(null);
   const [portalForm, setPortalForm] = useState({
     provider: "pedidosya" as PortalProvider,
@@ -213,6 +214,14 @@ export function IntegrationPage() {
             <span>{sync.data.wasteRecordsUpdated} mermas actualizadas</span>
           </div>
         ) : null}
+        {sync.data?.warnings?.length ? (
+          <div className="form-warning">
+            <strong>Advertencias</strong>
+            {sync.data.warnings.slice(-3).map((message) => (
+              <span key={message}>{message}</span>
+            ))}
+          </div>
+        ) : null}
 
         <div className="sync-form">
           <button
@@ -234,6 +243,7 @@ export function IntegrationPage() {
             <strong>
               Historial: {historyProgress.chunk.index}/{historyProgress.chunk.total}
             </strong>
+            {historyProgress.chunk.label ? <span>Etapa: {historyProgress.chunk.label}</span> : null}
             <span>
               Fecha en proceso: {historyProgress.chunk.from}
               {historyProgress.chunk.to !== historyProgress.chunk.from ? ` a ${historyProgress.chunk.to}` : ""}
@@ -244,6 +254,18 @@ export function IntegrationPage() {
             {historyProgress.result.errors.length > 0 ? (
               <span>{historyProgress.result.errors.length} fechas con error</span>
             ) : null}
+            {historyProgress.result.warnings?.length ? (
+              <span>{historyProgress.result.warnings.length} advertencias</span>
+            ) : null}
+          </div>
+        ) : null}
+
+        {historyProgress?.result.warnings?.length ? (
+          <div className="form-warning">
+            <strong>Advertencias</strong>
+            {historyProgress.result.warnings.slice(-5).map((message) => (
+              <span key={message}>{message}</span>
+            ))}
           </div>
         ) : null}
 

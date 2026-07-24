@@ -12,7 +12,12 @@ import {
 } from "./auth.js";
 import { db, migrate, queryOne } from "./db.js";
 import { dulceHoraCredentialsConfigured } from "./dulceHoraClient.js";
-import { getDefaultBranch, syncDulceHoraDate, syncDulceHoraHistory } from "./dulceHoraSync.js";
+import {
+  getDefaultBranch,
+  syncDulceHoraDate,
+  syncDulceHoraHistory,
+  syncDulceHoraWasteHistory
+} from "./dulceHoraSync.js";
 import { registerCashflowRoutes } from "./cashflow.js";
 import { registerExpenseRoutes } from "./expenses.js";
 import { registerFinanceRoutes } from "./finance.js";
@@ -82,7 +87,9 @@ const loginSchema = z.object({
 
 const syncDateSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  branchId: z.string().optional()
+  branchId: z.string().optional(),
+  includeWaste: z.boolean().optional(),
+  includeStatistics: z.boolean().optional()
 });
 const syncHistorySchema = z.object({
   branchId: z.string().optional(),
@@ -1468,7 +1475,9 @@ app.post(
         branchId: branch.id,
         organizationId: req.user!.organization_id,
         userId: req.user!.id,
-        date: input.date
+        date: input.date,
+        includeWaste: input.includeWaste,
+        includeStatistics: input.includeStatistics
       });
 
       res.status(201).json({ ...result, branch });
@@ -1512,6 +1521,43 @@ app.post(
     } catch (error) {
       const message = readableSyncError(error);
       console.error("[dulce-hora:sync-history]", message, error);
+      res.status(syncErrorStatus(error)).json({ error: message });
+    }
+  }
+);
+
+app.post(
+  "/api/integration/dulce-hora/sync-waste-history",
+  requireRole(["owner", "administrator", "manager"]),
+  async (req, res) => {
+    const input = syncHistorySchema.parse(req.body);
+    const branch = input.branchId
+      ? await queryOne<{ id: string; name: string }>(
+          `select id, name
+           from branches
+           where id = $1 and organization_id = $2 and active = true`,
+          [input.branchId, req.user!.organization_id]
+        )
+      : await getDefaultBranch(req.user!.organization_id);
+
+    if (!branch) {
+      res.status(400).json({ error: "No hay una sucursal activa para sincronizar" });
+      return;
+    }
+
+    try {
+      const result = await syncDulceHoraWasteHistory({
+        branchId: branch.id,
+        organizationId: req.user!.organization_id,
+        userId: req.user!.id,
+        dateFrom: input.from ?? null,
+        dateTo: input.to ?? null
+      });
+
+      res.status(201).json({ ...result, branch });
+    } catch (error) {
+      const message = readableSyncError(error);
+      console.error("[dulce-hora:sync-waste-history]", message, error);
       res.status(syncErrorStatus(error)).json({ error: message });
     }
   }
