@@ -20,7 +20,10 @@ type Database = Queryable & {
   transaction<T>(callback: (tx: Queryable) => Promise<T>): Promise<T>;
 };
 
-const defaultDataDir = process.env.NETLIFY === "true"
+const isServerlessRuntime = process.env.NETLIFY === "true" ||
+  process.env.DULCE_HORA_SERVERLESS === "true" ||
+  Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
+const defaultDataDir = isServerlessRuntime
   ? join("/tmp", "dulce-hora-pglite")
   : join(rootDir, "data", "pglite");
 const dataDir = process.env.DATA_DIR ?? defaultDataDir;
