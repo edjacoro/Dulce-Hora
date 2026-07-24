@@ -52,7 +52,7 @@ const navItems = [
 
 const HISTORY_BOOTSTRAP_MIN_SALES = 10000;
 const HISTORY_BOOTSTRAP_MIN_WASTE = 200;
-const HISTORY_SYNC_SESSION_KEY = "dulce-hora-auto-history-sync-started-v3";
+const HISTORY_SYNC_SESSION_KEY = "dulce-hora-auto-history-sync-started-v5";
 const EXPENSES_IMPORT_SESSION_KEY = "dulce-hora-auto-expenses-import-started-v2";
 
 export function App() {

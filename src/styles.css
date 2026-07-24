@@ -201,6 +201,12 @@ a {
   font-weight: 700;
 }
 
+.form-error span {
+  display: block;
+  margin-top: 4px;
+  font-weight: 600;
+}
+
 .form-success {
   grid-column: 1 / -1;
   margin: 0;

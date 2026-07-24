@@ -66,6 +66,13 @@ export class DulceHoraRateLimitError extends Error {
   }
 }
 
+export class DulceHoraAuthenticationError extends Error {
+  constructor(message = "La sesion de Dulce Hora no quedo autenticada") {
+    super(message);
+    this.name = "DulceHoraAuthenticationError";
+  }
+}
+
 export class DulceHoraClient {
   private readonly cookies = new Map<string, string>();
   private readonly requestDelayMs: number;
@@ -78,6 +85,7 @@ export class DulceHoraClient {
   }
 
   async login() {
+    this.cookies.clear();
     await this.fetchWithCookies("/login");
 
     const response = await this.fetchWithCookies("/login", {
@@ -92,8 +100,17 @@ export class DulceHoraClient {
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location") ?? "/panel";
       await this.wait();
-      await this.fetchWithCookies(location.startsWith("http") ? location : location);
+      const landing = await this.fetchWithCookies(location.startsWith("http") ? location : location);
+      const landingHtml = await landing.text();
+      if (isLoginResponse(landing, landingHtml)) {
+        throw new DulceHoraAuthenticationError();
+      }
       return;
+    }
+
+    const html = await response.text();
+    if (isLoginResponse(response, html)) {
+      throw new DulceHoraAuthenticationError();
     }
 
     if (!response.ok) {
@@ -107,8 +124,8 @@ export class DulceHoraClient {
     const response = await this.fetchWithCookies(`/panel/facturacion/registros?fecha=${dateParam}`);
     const html = await response.text();
 
-    if (response.url.endsWith("/login") || html.includes('id="loginForm"')) {
-      throw new Error("La sesion de Dulce Hora no quedo autenticada");
+    if (isLoginResponse(response, html)) {
+      throw new DulceHoraAuthenticationError();
     }
 
     return parseRegistryEntries(html);
@@ -118,6 +135,9 @@ export class DulceHoraClient {
     await this.wait();
     const response = await this.fetchWithCookies("/panel/facturacion");
     const html = await response.text();
+    if (isLoginResponse(response, html)) {
+      throw new DulceHoraAuthenticationError();
+    }
     const items = [
       ...extractCatalogArray(html, "productos", "product"),
       ...extractCatalogArray(html, "botonesPersonalizados", "custom")
@@ -127,6 +147,9 @@ export class DulceHoraClient {
       await this.wait();
       const fallbackResponse = await this.fetchWithCookies("/panel/desperdicios/local");
       const fallbackHtml = await fallbackResponse.text();
+      if (isLoginResponse(fallbackResponse, fallbackHtml)) {
+        throw new DulceHoraAuthenticationError();
+      }
       items.push(...parseWasteProducts(fallbackHtml).map((product) => ({
         source: "product" as const,
         id: product.id,
@@ -145,8 +168,8 @@ export class DulceHoraClient {
     const response = await this.fetchWithCookies("/panel/estadisticas/local");
     const html = await response.text();
 
-    if (response.url.endsWith("/login") || html.includes('id="loginForm"')) {
-      throw new Error("La sesion de Dulce Hora no quedo autenticada");
+    if (isLoginResponse(response, html)) {
+      throw new DulceHoraAuthenticationError();
     }
 
     const products = [
@@ -164,7 +187,9 @@ export class DulceHoraClient {
     await this.wait();
     const response = await this.fetchWithCookies("/panel/facturacion/local/productos/personalizados");
     const html = await response.text();
-    if (response.url.endsWith("/login") || html.includes('id="loginForm"')) return [];
+    if (isLoginResponse(response, html)) {
+      throw new DulceHoraAuthenticationError();
+    }
     return parsePersonalizedProducts(html);
   }
 
@@ -173,8 +198,8 @@ export class DulceHoraClient {
     const response = await this.fetchWithCookies("/panel/desperdicios/local");
     const html = await response.text();
 
-    if (response.url.endsWith("/login") || html.includes('id="loginForm"')) {
-      throw new Error("La sesion de Dulce Hora no quedo autenticada");
+    if (isLoginResponse(response, html)) {
+      throw new DulceHoraAuthenticationError();
     }
 
     const products = parseWasteProducts(html);
@@ -193,6 +218,9 @@ export class DulceHoraClient {
 
     const contentType = response.headers.get("content-type") ?? "";
     const body = await response.text();
+    if (isLoginResponse(response, body)) {
+      throw new DulceHoraAuthenticationError();
+    }
     if (response.url.endsWith("/302.html") || body.includes("Excediste la cantidad de intentos")) {
       throw new DulceHoraRateLimitError();
     }
@@ -270,6 +298,18 @@ function documentPath(entry: RegistryEntry) {
     return `/panel/facturacion/comprobante/parcial?id=${encodeURIComponent(entry.externalId)}`;
   }
   return `/panel/facturacion/comprobante/fiscal?id=${encodeURIComponent(entry.externalId)}`;
+}
+
+function isLoginResponse(response: Response, body: string) {
+  try {
+    if (new URL(response.url).pathname.endsWith("/login")) return true;
+  } catch {
+    // Ignore malformed or empty response URLs from non-browser fetch implementations.
+  }
+  return (
+    body.includes('id="loginForm"') ||
+    (body.includes("loginUsuario") && body.includes("loginPassword"))
+  );
 }
 
 function parseRegistryEntries(html: string): RegistryEntry[] {

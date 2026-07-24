@@ -1,6 +1,6 @@
 import { api } from "./api";
 
-export type SyncResult = {
+type SyncResult = {
   runId: string;
   date: string;
   recordsReceived: number;
@@ -21,42 +21,35 @@ export type SyncHistoryResult = SyncResult & {
 };
 
 const defaultHistoryStartDate = "2026-04-17";
+const defaultHistoryChunkDays = 14;
 
 export async function syncHistoryInChunks(
   onChunk?: (result: SyncHistoryResult, chunk: { from: string; to: string; index: number; total: number }) => void
 ) {
-  const chunks = dateChunks(historyStartDate(), todayArgentina(), 1);
+  const chunks = dateChunks(historyStartDate(), todayArgentina(), historyChunkDays());
   let aggregate = emptyHistoryResult();
 
   for (const [index, chunk] of chunks.entries()) {
     try {
-      const result = await api<SyncResult>("/api/integration/dulce-hora/sync-date", {
+      const result = await api<SyncHistoryResult>("/api/integration/dulce-hora/sync-history", {
         method: "POST",
-        body: JSON.stringify({ date: chunk.from })
+        body: JSON.stringify({ from: chunk.from, to: chunk.to })
       });
-      aggregate = mergeHistoryResults(aggregate, dateResultToHistory(result));
+      aggregate = mergeHistoryResults(aggregate, result);
     } catch (error) {
-      aggregate.errors.push(`${chunk.from}: ${error instanceof Error ? error.message : "Error desconocido"}`);
+      const dateLabel = chunk.from === chunk.to ? chunk.from : `${chunk.from} a ${chunk.to}`;
+      aggregate.errors.push(`${dateLabel}: ${error instanceof Error ? error.message : "Error desconocido"}`);
     }
     onChunk?.(aggregate, { ...chunk, index: index + 1, total: chunks.length });
   }
 
   if (aggregate.errors.length >= chunks.length) {
-    throw new Error("No se pudo sincronizar ningun dia del historial de Dulce Hora");
+    throw new Error(
+      `No se pudo sincronizar ningun dia del historial de Dulce Hora. ${aggregate.errors.slice(0, 3).join(" | ")}`
+    );
   }
 
   return aggregate;
-}
-
-function dateResultToHistory(result: SyncResult): SyncHistoryResult {
-  const hasData = result.recordsReceived > 0 || result.wasteRecordsReceived > 0;
-  return {
-    ...result,
-    date: "historial",
-    dateFrom: result.date,
-    dateTo: result.date,
-    datesSynced: hasData ? 1 : 0
-  };
 }
 
 function mergeHistoryResults(left: SyncHistoryResult, right: SyncHistoryResult): SyncHistoryResult {
@@ -116,6 +109,12 @@ function dateChunks(from: string, to: string, size: number) {
 function historyStartDate() {
   const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
   return env?.VITE_DULCE_HORA_HISTORY_START || defaultHistoryStartDate;
+}
+
+function historyChunkDays() {
+  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+  const parsed = Number(env?.VITE_DULCE_HORA_HISTORY_CHUNK_DAYS ?? defaultHistoryChunkDays);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultHistoryChunkDays;
 }
 
 function todayArgentina() {

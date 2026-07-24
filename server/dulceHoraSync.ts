@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { db, queryOne } from "./db.js";
 import {
+  DulceHoraAuthenticationError,
   DulceHoraClient,
   DulceHoraRateLimitError,
   getDulceHoraCredentials,
+  type DulceHoraCredentials,
   type DulceHoraDocument,
   type DulceHoraWastePayload,
   type RegistryEntry,
@@ -58,6 +60,16 @@ type ParsedWasteRecord = {
   rawData: Record<string, unknown>;
 };
 
+type LoadedDateData = {
+  catalog: Map<string, ProductCatalogItem>;
+  wastePayload: DulceHoraWastePayload;
+  statisticsEntries: Array<Record<string, unknown>>;
+  registryEntries: RegistryEntry[];
+  registryDocuments: DulceHoraDocument[];
+  registryFallbackEntries: RegistryEntry[];
+  registryErrors: string[];
+};
+
 export type SyncResult = {
   runId: string;
   date: string;
@@ -106,50 +118,30 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
   };
 
   try {
-    const client = new DulceHoraClient(credentials);
-    await client.login();
-    const [statistics, wastePayload] = await Promise.all([
-      client.fetchStatistics(),
-      client.fetchWasteRecords()
-    ]);
+    const loaded = await loadDateData(credentials, input.date);
+    const statisticsEntries = loaded.statisticsEntries;
 
-    const catalog = statistics.catalog.size > 0 ? statistics.catalog : await client.fetchCatalog();
-    const registryEntries = await client.fetchRegistry(input.date);
+    if (statisticsEntries.length > 0) {
+      result.recordsReceived = statisticsEntries.length;
 
-    if (registryEntries.length > 0) {
-      result.recordsReceived = registryEntries.length;
-      for (const entry of registryEntries) {
+      for (const detail of statisticsEntries) {
         try {
-          const document = await fetchDocumentWithRetry(client, entry);
-          const parsed = parseDocument(document, input.date, catalog);
+          const parsed = parseDocument(statisticsDocument(detail), input.date, loaded.catalog);
           const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
           result.recordsCreated += upsert.created ? 1 : 0;
           result.recordsUpdated += upsert.created ? 0 : 1;
           result.itemRows += parsed.items.length;
         } catch (error) {
-          if (error instanceof DulceHoraRateLimitError) {
-            const parsed = parseListingDocument(entry, input.date);
-            const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
-            result.recordsCreated += upsert.created ? 1 : 0;
-            result.recordsUpdated += upsert.created ? 0 : 1;
-            if (result.errors.length === 0) {
-              result.errors.push(
-                "Dulce Hora limito temporalmente el detalle de comprobantes; se completo la venta desde el listado."
-              );
-            }
-            continue;
-          }
           result.recordsRejected += 1;
           result.errors.push(error instanceof Error ? error.message : "Error desconocido");
         }
       }
     } else {
-      const entries = statistics.documents.filter((document) => documentDate(document) === input.date);
-      result.recordsReceived = entries.length;
+      result.recordsReceived = loaded.registryEntries.length;
 
-      for (const detail of entries) {
+      for (const document of loaded.registryDocuments) {
         try {
-          const parsed = parseDocument(statisticsDocument(detail), input.date, catalog);
+          const parsed = parseDocument(document, input.date, loaded.catalog);
           const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
           result.recordsCreated += upsert.created ? 1 : 0;
           result.recordsUpdated += upsert.created ? 0 : 1;
@@ -159,13 +151,29 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
           result.errors.push(error instanceof Error ? error.message : "Error desconocido");
         }
       }
+
+      for (const entry of loaded.registryFallbackEntries) {
+        const parsed = parseListingDocument(entry, input.date);
+        const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
+        result.recordsCreated += upsert.created ? 1 : 0;
+        result.recordsUpdated += upsert.created ? 0 : 1;
+      }
+
+      if (loaded.registryFallbackEntries.length > 0) {
+        result.errors.push(
+          "Dulce Hora limito temporalmente el detalle de comprobantes; se completo la venta desde el listado."
+        );
+      }
+
+      result.recordsRejected += loaded.registryErrors.length;
+      result.errors.push(...loaded.registryErrors);
     }
 
     const wasteResult = await saveWasteRecords(
       input.organizationId,
       input.branchId,
       input.date,
-      wastePayload
+      loaded.wastePayload
     );
     result.wasteRecordsReceived = wasteResult.received;
     result.wasteRecordsCreated = wasteResult.created;
@@ -215,12 +223,12 @@ export async function syncDulceHoraHistory(
   };
 
   try {
-    const client = new DulceHoraClient(credentials);
-    await client.login();
-    const [statistics, wastePayload] = await Promise.all([
-      client.fetchStatistics(),
-      client.fetchWasteRecords()
-    ]);
+    const { statistics, wastePayload, catalog } = await withDulceHoraSession(credentials, async (client) => {
+      const statistics = await client.fetchStatistics();
+      const wastePayload = await client.fetchWasteRecords();
+      const catalog = statistics.catalog.size > 0 ? statistics.catalog : await client.fetchCatalog();
+      return { statistics, wastePayload, catalog };
+    });
     const documentsByDate = groupByDate(statistics.documents);
     const dates = [...new Set([...documentsByDate.keys(), ...wasteDates(wastePayload)])]
       .filter((date) => (!input.dateFrom || date >= input.dateFrom) && (!input.dateTo || date <= input.dateTo))
@@ -234,7 +242,7 @@ export async function syncDulceHoraHistory(
 
       for (const detail of entries) {
         try {
-          const parsed = parseDocument(statisticsDocument(detail), date, statistics.catalog);
+          const parsed = parseDocument(statisticsDocument(detail), date, catalog);
           const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
           result.recordsCreated += upsert.created ? 1 : 0;
           result.recordsUpdated += upsert.created ? 0 : 1;
@@ -266,6 +274,68 @@ export async function syncDulceHoraHistory(
     await finishRun(runId, "failed", result, message);
     throw error;
   }
+}
+
+async function loadDateData(credentials: DulceHoraCredentials, date: string): Promise<LoadedDateData> {
+  return withDulceHoraSession(credentials, async (client) => {
+    const statistics = await client.fetchStatistics();
+    const wastePayload = await client.fetchWasteRecords();
+    const catalog = statistics.catalog.size > 0 ? statistics.catalog : await client.fetchCatalog();
+    const statisticsEntries = statistics.documents.filter((document) => documentDate(document) === date);
+    const loaded: LoadedDateData = {
+      catalog,
+      wastePayload,
+      statisticsEntries,
+      registryEntries: [],
+      registryDocuments: [],
+      registryFallbackEntries: [],
+      registryErrors: []
+    };
+
+    if (statisticsEntries.length > 0) return loaded;
+
+    loaded.registryEntries = await client.fetchRegistry(date);
+    for (const entry of loaded.registryEntries) {
+      try {
+        loaded.registryDocuments.push(await fetchDocumentWithRetry(client, entry));
+      } catch (error) {
+        if (error instanceof DulceHoraAuthenticationError) {
+          throw error;
+        }
+        if (error instanceof DulceHoraRateLimitError) {
+          loaded.registryFallbackEntries.push(entry);
+          continue;
+        }
+        loaded.registryErrors.push(error instanceof Error ? error.message : "Error desconocido");
+      }
+    }
+
+    return loaded;
+  });
+}
+
+async function withDulceHoraSession<T>(
+  credentials: DulceHoraCredentials,
+  callback: (client: DulceHoraClient) => Promise<T>
+): Promise<T> {
+  const retries = Number(process.env.DULCE_HORA_AUTH_RETRIES ?? 2);
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const client = new DulceHoraClient(credentials);
+    try {
+      await client.login();
+      return await callback(client);
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof DulceHoraAuthenticationError) || attempt === retries) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1200 * (attempt + 1)));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("No se pudo autenticar con Dulce Hora");
 }
 
 async function fetchDocumentWithRetry(client: DulceHoraClient, entry: RegistryEntry) {

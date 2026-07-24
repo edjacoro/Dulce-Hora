@@ -1652,14 +1652,15 @@ function toNumber(value: unknown) {
 
 function readableSyncError(error: unknown) {
   const message = error instanceof Error ? error.message : "Error desconocido al sincronizar Dulce Hora";
+  const backendEnv = process.env.NETLIFY === "true" ? "Netlify" : "el entorno del backend local";
   if (message.includes("fetch failed")) {
-    return "No se pudo conectar desde Netlify con Dulce Hora. Puede ser un bloqueo temporal del panel o un problema de red.";
+    return `No se pudo conectar desde ${backendEnv} con Dulce Hora. Puede ser un bloqueo temporal del panel o un problema de red.`;
   }
   if (message.includes("Faltan DULCE_HORA_USERNAME") || message.includes("DULCE_HORA_PASSWORD")) {
     return message;
   }
   if (message.includes("sesion de Dulce Hora") || message.includes("iniciar sesion")) {
-    return `${message}. Revisar DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en Netlify.`;
+    return `${message}. Revisar DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en ${backendEnv}.`;
   }
   if (message.includes("Dulce Hora limito")) {
     return message;

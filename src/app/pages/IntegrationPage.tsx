@@ -65,6 +65,10 @@ type PortalSalesImportResult = {
 export function IntegrationPage() {
   const queryClient = useQueryClient();
   const [date, setDate] = useState(() => todayArgentina());
+  const [historyProgress, setHistoryProgress] = useState<{
+    result: SyncHistoryResult;
+    chunk: { from: string; to: string; index: number; total: number };
+  } | null>(null);
   const [portalForm, setPortalForm] = useState({
     provider: "pedidosya" as PortalProvider,
     paymentKind: "online" as PortalPaymentKind,
@@ -99,7 +103,10 @@ export function IntegrationPage() {
     }
   });
   const syncHistory = useMutation({
-    mutationFn: () => syncHistoryInChunks(),
+    mutationFn: () =>
+      syncHistoryInChunks((result, chunk) => {
+        setHistoryProgress({ result, chunk });
+      }),
     onSuccess: async () => {
       await invalidateReporting(queryClient);
     }
@@ -211,13 +218,43 @@ export function IntegrationPage() {
           <button
             className="icon-text-button"
             disabled={syncHistory.isPending || !status.data?.credentialsConfigured}
-            onClick={() => syncHistory.mutate()}
+            onClick={() => {
+              setHistoryProgress(null);
+              syncHistory.mutate();
+            }}
             type="button"
           >
             <CalendarSync size={18} aria-hidden="true" />
             {syncHistory.isPending ? "Sincronizando historial..." : "Sincronizar historial completo"}
           </button>
         </div>
+
+        {historyProgress ? (
+          <div className="sync-result">
+            <strong>
+              Historial: {historyProgress.chunk.index}/{historyProgress.chunk.total}
+            </strong>
+            <span>
+              Fecha en proceso: {historyProgress.chunk.from}
+              {historyProgress.chunk.to !== historyProgress.chunk.from ? ` a ${historyProgress.chunk.to}` : ""}
+            </span>
+            <span>{historyProgress.result.recordsReceived} comprobantes leidos</span>
+            <span>{historyProgress.result.itemRows} items</span>
+            <span>{historyProgress.result.wasteRecordsReceived} mermas leidas</span>
+            {historyProgress.result.errors.length > 0 ? (
+              <span>{historyProgress.result.errors.length} fechas con error</span>
+            ) : null}
+          </div>
+        ) : null}
+
+        {historyProgress?.result.errors.length ? (
+          <div className="form-error">
+            <strong>Errores detectados</strong>
+            {historyProgress.result.errors.slice(-5).map((message) => (
+              <span key={message}>{message}</span>
+            ))}
+          </div>
+        ) : null}
 
         {syncHistory.data ? (
           <div className="sync-result">
