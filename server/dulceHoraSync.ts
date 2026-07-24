@@ -175,7 +175,7 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
 }
 
 export async function syncDulceHoraHistory(
-  input: Omit<SyncInput, "date"> & { dateFrom?: string | null; dateTo?: string | null }
+  input: Omit<SyncInput, "date"> & { dateFrom?: string | null; dateTo?: string | null; includeWaste?: boolean }
 ): Promise<SyncHistoryResult> {
   const credentials = getDulceHoraCredentials();
   if (!credentials) {
@@ -208,14 +208,15 @@ export async function syncDulceHoraHistory(
   };
 
   try {
+    const includeWaste = input.includeWaste ?? true;
     const { statistics, wastePayload, catalog } = await withDulceHoraSession(credentials, async (client) => {
       const statistics = await client.fetchStatistics();
-      const wastePayload = await client.fetchWasteRecords();
+      const wastePayload = includeWaste ? await client.fetchWasteRecords() : emptyWastePayload();
       const catalog = statistics.catalog.size > 0 ? statistics.catalog : await client.fetchCatalog();
       return { statistics, wastePayload, catalog };
     });
     const documentsByDate = groupByDate(statistics.documents);
-    const dates = [...new Set([...documentsByDate.keys(), ...wasteDates(wastePayload)])]
+    const dates = [...new Set([...documentsByDate.keys(), ...(includeWaste ? wasteDates(wastePayload) : [])])]
       .filter((date) => (!input.dateFrom || date >= input.dateFrom) && (!input.dateTo || date <= input.dateTo))
       .sort();
     result.dateFrom = dates[0] ?? null;
@@ -238,12 +239,14 @@ export async function syncDulceHoraHistory(
         }
       }
 
-      const wasteResult = await saveWasteRecords(
-        input.organizationId,
-        input.branchId,
-        date,
-        wastePayload
-      );
+      const wasteResult = includeWaste
+        ? await saveWasteRecords(
+            input.organizationId,
+            input.branchId,
+            date,
+            wastePayload
+          )
+        : { received: 0, created: 0, updated: 0 };
       result.wasteRecordsReceived += wasteResult.received;
       result.wasteRecordsCreated += wasteResult.created;
       result.wasteRecordsUpdated += wasteResult.updated;
@@ -368,7 +371,7 @@ async function loadDateData(
 ): Promise<LoadedDateData> {
   return withDulceHoraSession(credentials, async (client) => {
     const warnings: string[] = [];
-    const includeStatistics = options.includeStatistics ?? !isServerlessRuntime();
+    const includeStatistics = options.includeStatistics ?? true;
     const registryEntries = await client.fetchRegistry(date);
     const statistics = includeStatistics ? await fetchStatisticsSafely(client, warnings) : null;
     const wastePayload = options.includeWaste

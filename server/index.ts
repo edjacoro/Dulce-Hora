@@ -93,6 +93,7 @@ const syncDateSchema = z.object({
 });
 const syncHistorySchema = z.object({
   branchId: z.string().optional(),
+  includeWaste: z.boolean().optional(),
   from: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -1514,7 +1515,8 @@ app.post(
         organizationId: req.user!.organization_id,
         userId: req.user!.id,
         dateFrom: input.from ?? null,
-        dateTo: input.to ?? null
+        dateTo: input.to ?? null,
+        includeWaste: input.includeWaste
       });
 
       res.status(201).json({ ...result, branch });

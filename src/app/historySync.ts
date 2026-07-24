@@ -22,7 +22,7 @@ export type SyncHistoryResult = SyncResult & {
 };
 
 const defaultHistoryStartDate = "2026-04-17";
-const defaultHistoryChunkDays = 1;
+const defaultHistoryChunkDays = 7;
 
 export async function syncHistoryInChunks(
   onChunk?: (result: SyncHistoryResult, chunk: { from: string; to: string; index: number; total: number; label?: string }) => void
@@ -35,19 +35,11 @@ export async function syncHistoryInChunks(
 
   for (const [index, chunk] of chunks.entries()) {
     try {
-      if (chunk.from === chunk.to) {
-        const result = await api<SyncResult>("/api/integration/dulce-hora/sync-date", {
-          method: "POST",
-          body: JSON.stringify({ date: chunk.from, includeWaste: false, includeStatistics: false })
-        });
-        aggregate = mergeHistoryResults(aggregate, dateResultToHistory(result));
-      } else {
-        const result = await api<SyncHistoryResult>("/api/integration/dulce-hora/sync-history", {
-          method: "POST",
-          body: JSON.stringify({ from: chunk.from, to: chunk.to })
-        });
-        aggregate = mergeHistoryResults(aggregate, result);
-      }
+      const result = await api<SyncHistoryResult>("/api/integration/dulce-hora/sync-history", {
+        method: "POST",
+        body: JSON.stringify({ from: chunk.from, to: chunk.to, includeWaste: false })
+      });
+      aggregate = mergeHistoryResults(aggregate, result);
     } catch (error) {
       const dateLabel = chunk.from === chunk.to ? chunk.from : `${chunk.from} a ${chunk.to}`;
       aggregate.errors.push(`${dateLabel}: ${error instanceof Error ? error.message : "Error desconocido"}`);
@@ -105,7 +97,7 @@ function mergeHistoryResults(left: SyncHistoryResult, right: SyncHistoryResult):
     wasteRecordsCreated: left.wasteRecordsCreated + right.wasteRecordsCreated,
     wasteRecordsUpdated: left.wasteRecordsUpdated + right.wasteRecordsUpdated,
     errors: [...left.errors, ...right.errors],
-    warnings: [...(left.warnings ?? []), ...(right.warnings ?? [])]
+    warnings: uniqueMessages([...(left.warnings ?? []), ...(right.warnings ?? [])])
   };
 }
 
@@ -135,6 +127,10 @@ function isWarningMessage(message: string) {
     message.includes("No se pudo leer estadisticas completas") ||
     message.includes("No se pudieron leer las mermas en esta pasada")
   );
+}
+
+function uniqueMessages(messages: string[]) {
+  return [...new Set(messages)];
 }
 
 function dateChunks(from: string, to: string, size: number) {
