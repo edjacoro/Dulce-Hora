@@ -319,8 +319,10 @@ async function loadRegistryDetails(
   loaded: LoadedDateData,
   entries: RegistryEntry[]
 ) {
-  const defaultDetailLimit = process.env.NETLIFY === "true" ? 20 : 60;
-  const detailLimit = Number(process.env.DULCE_HORA_MISSING_DETAIL_LIMIT ?? defaultDetailLimit);
+  const detailLimit = readNonNegativeIntegerEnv(
+    "DULCE_HORA_MISSING_DETAIL_LIMIT",
+    isServerlessRuntime() ? 0 : 60
+  );
 
   for (const [index, entry] of entries.entries()) {
     if (index >= detailLimit) {
@@ -375,7 +377,7 @@ async function withDulceHoraSession<T>(
 }
 
 async function fetchDocumentWithRetry(client: DulceHoraClient, entry: RegistryEntry) {
-  const defaultRetries = process.env.NETLIFY === "true" ? 0 : 1;
+  const defaultRetries = isServerlessRuntime() ? 0 : 1;
   const retries = Number(process.env.DULCE_HORA_RATE_LIMIT_RETRIES ?? defaultRetries);
   const pauseMs = Number(process.env.DULCE_HORA_RATE_LIMIT_PAUSE_MS ?? 65000);
 
@@ -391,6 +393,19 @@ async function fetchDocumentWithRetry(client: DulceHoraClient, entry: RegistryEn
   }
 
   throw new DulceHoraRateLimitError();
+}
+
+function readNonNegativeIntegerEnv(name: string, fallback: number) {
+  const parsed = Number(process.env[name] ?? fallback);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function isServerlessRuntime() {
+  return (
+    process.env.DULCE_HORA_SERVERLESS === "true" ||
+    process.env.NETLIFY === "true" ||
+    Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT)
+  );
 }
 
 function groupByDate(documents: Array<Record<string, unknown>>) {

@@ -21,8 +21,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       try {
         const text = await response.text();
         if (text.trim()) {
+          const cleanedText = cleanErrorText(text);
           payload = {
-            error: `No se pudo completar la solicitud (${response.status}). ${text.trim().slice(0, 240)}`
+            error:
+              response.status === 504 || /Inactivity Timeout/i.test(text)
+                ? "Netlify corto la importacion por timeout leyendo Dulce Hora. Reintenta la fecha; si se repite, el portal externo esta tardando demasiado."
+                : `No se pudo completar la solicitud (${response.status}). ${cleanedText.slice(0, 240)}`
           };
         }
       } catch {
@@ -33,6 +37,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+function cleanErrorText(text: string) {
+  return text
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export type SetupStatus = {

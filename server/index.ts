@@ -1656,6 +1656,9 @@ function readableSyncError(error: unknown) {
   if (message.includes("fetch failed")) {
     return `No se pudo conectar desde ${backendEnv} con Dulce Hora. Puede ser un bloqueo temporal del panel o un problema de red.`;
   }
+  if (/timeout|aborted/i.test(message)) {
+    return `Dulce Hora tardo demasiado en responder desde ${backendEnv}. Se puede reintentar la importacion; si persiste, conviene sincronizar por fecha o esperar unos minutos.`;
+  }
   if (message.includes("Faltan DULCE_HORA_USERNAME") || message.includes("DULCE_HORA_PASSWORD")) {
     return message;
   }
@@ -1672,6 +1675,7 @@ function syncErrorStatus(error: unknown) {
   const message = error instanceof Error ? error.message : "";
   if (
     message.includes("fetch failed") ||
+    /timeout|aborted/i.test(message) ||
     message.includes("Dulce Hora") ||
     message.includes("DULCE_HORA_USERNAME") ||
     message.includes("DULCE_HORA_PASSWORD") ||

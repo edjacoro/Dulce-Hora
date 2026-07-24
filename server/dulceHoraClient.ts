@@ -76,12 +76,15 @@ export class DulceHoraAuthenticationError extends Error {
 export class DulceHoraClient {
   private readonly cookies = new Map<string, string>();
   private readonly requestDelayMs: number;
+  private readonly requestTimeoutMs: number;
 
   constructor(
     private readonly credentials: DulceHoraCredentials,
-    requestDelayMs = Number(process.env.DULCE_HORA_REQUEST_DELAY_MS ?? 600)
+    requestDelayMs = Number(process.env.DULCE_HORA_REQUEST_DELAY_MS ?? defaultRequestDelayMs()),
+    requestTimeoutMs = Number(process.env.DULCE_HORA_FETCH_TIMEOUT_MS ?? defaultRequestTimeoutMs())
   ) {
     this.requestDelayMs = requestDelayMs;
+    this.requestTimeoutMs = requestTimeoutMs;
   }
 
   async login() {
@@ -243,8 +246,11 @@ export class DulceHoraClient {
 
   private async fetchWithCookies(path: string, init: RequestInit = {}) {
     const url = path.startsWith("http") ? path : `${baseUrl}${path}`;
+    const signal =
+      init.signal ?? (this.requestTimeoutMs > 0 ? AbortSignal.timeout(this.requestTimeoutMs) : undefined);
     const response = await fetch(url, {
       ...init,
+      signal,
       headers: {
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
         "Accept-Language": "es-AR,es;q=0.9,en;q=0.7",
@@ -277,6 +283,22 @@ export class DulceHoraClient {
       this.cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
     }
   }
+}
+
+function defaultRequestDelayMs() {
+  return isServerlessRuntime() ? 150 : 600;
+}
+
+function defaultRequestTimeoutMs() {
+  return isServerlessRuntime() ? 12000 : 30000;
+}
+
+function isServerlessRuntime() {
+  return (
+    process.env.DULCE_HORA_SERVERLESS === "true" ||
+    process.env.NETLIFY === "true" ||
+    Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT)
+  );
 }
 
 export function getDulceHoraCredentials(): DulceHoraCredentials | null {
