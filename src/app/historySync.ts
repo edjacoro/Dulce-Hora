@@ -29,36 +29,27 @@ export async function syncHistoryInChunks(
 ) {
   const startDate = historyStartDate();
   const endDate = todayArgentina();
-  const chunks = dateChunks(startDate, endDate, historyChunkDays());
-  const totalSteps = chunks.length + 1;
   let aggregate = emptyHistoryResult();
 
-  for (const [index, chunk] of chunks.entries()) {
-    try {
-      const result = await api<SyncHistoryResult>("/api/integration/dulce-hora/sync-history", {
-        method: "POST",
-        body: JSON.stringify({ from: chunk.from, to: chunk.to, includeWaste: false })
-      });
-      aggregate = mergeHistoryResults(aggregate, result);
-    } catch (error) {
-      const dateLabel = chunk.from === chunk.to ? chunk.from : `${chunk.from} a ${chunk.to}`;
-      aggregate.errors.push(`${dateLabel}: ${error instanceof Error ? error.message : "Error desconocido"}`);
-    }
-    onChunk?.(aggregate, { ...chunk, index: index + 1, total: totalSteps, label: "Ventas" });
-  }
-
+  onChunk?.(aggregate, {
+    from: startDate,
+    to: endDate,
+    index: 1,
+    total: 1,
+    label: "Historial completo"
+  });
   try {
-    const wasteResult = await api<SyncHistoryResult>("/api/integration/dulce-hora/sync-waste-history", {
+    const result = await api<SyncHistoryResult>("/api/integration/dulce-hora/sync-history", {
       method: "POST",
-      body: JSON.stringify({ from: startDate, to: endDate })
+      body: JSON.stringify({ from: startDate, to: endDate, includeWaste: true })
     });
-    aggregate = mergeHistoryResults(aggregate, wasteResult);
+    aggregate = mergeHistoryResults(aggregate, result);
   } catch (error) {
-    aggregate.errors.push(`Mermas: ${error instanceof Error ? error.message : "Error desconocido"}`);
+    aggregate.errors.push(error instanceof Error ? error.message : "Error desconocido");
   }
-  onChunk?.(aggregate, { from: startDate, to: endDate, index: totalSteps, total: totalSteps, label: "Mermas" });
+  onChunk?.(aggregate, { from: startDate, to: endDate, index: 1, total: 1, label: "Historial completo" });
 
-  if (aggregate.errors.length >= totalSteps) {
+  if (aggregate.errors.length > 0 && aggregate.recordsReceived === 0 && aggregate.wasteRecordsReceived === 0) {
     throw new Error(
       `No se pudo sincronizar ningun dia del historial de Dulce Hora. ${aggregate.errors.slice(0, 3).join(" | ")}`
     );
@@ -157,7 +148,8 @@ function historyStartDate() {
 function historyChunkDays() {
   const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
   const parsed = Number(env?.VITE_DULCE_HORA_HISTORY_CHUNK_DAYS ?? defaultHistoryChunkDays);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultHistoryChunkDays;
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaultHistoryChunkDays;
+  return Math.max(7, Math.floor(parsed));
 }
 
 function todayArgentina() {

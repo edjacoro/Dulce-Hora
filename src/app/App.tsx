@@ -19,7 +19,7 @@ import { useEffect } from "react";
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { api, type DashboardOverview, type MeResponse, type ScheduleResponse, type SetupStatus } from "./api";
 import { dulceHoraLogo } from "./brand";
-import { syncHistoryInChunks } from "./historySync";
+import { AnalysisPage } from "./pages/AnalysisPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { CashflowPage } from "./pages/CashflowPage";
 import { EmployeeFilesPage } from "./pages/EmployeeFilesPage";
@@ -34,6 +34,7 @@ import { SalesPage } from "./pages/SalesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { WastePage } from "./pages/WastePage";
+import { canRunDulceHoraSyncFromThisHost } from "./runtime";
 
 const navItems = [
   { to: "/", label: "Inicio", icon: Home },
@@ -46,17 +47,16 @@ const navItems = [
   { to: "/mermas", label: "Mermas", icon: Trash2 },
   { to: "/finanzas", label: "Finanzas", icon: LineChart },
   { to: "/cashflow", label: "Cashflow", icon: Landmark },
+  { to: "/analisis", label: "Analisis", icon: BarChart3 },
   { to: "/importaciones", label: "Importaciones", icon: FileSpreadsheet },
   { to: "/ajustes", label: "Ajustes", icon: Settings }
 ];
 
-const HISTORY_BOOTSTRAP_MIN_SALES = 10000;
-const HISTORY_BOOTSTRAP_MIN_WASTE = 200;
-const HISTORY_SYNC_SESSION_KEY = "dulce-hora-auto-history-sync-started-v5";
 const EXPENSES_IMPORT_SESSION_KEY = "dulce-hora-auto-expenses-import-started-v2";
 
 export function App() {
   const queryClient = useQueryClient();
+  const canRunDulceHoraSync = canRunDulceHoraSyncFromThisHost();
   const setup = useQuery({
     queryKey: ["setup-status"],
     queryFn: () => api<SetupStatus>("/api/setup/status")
@@ -87,29 +87,6 @@ export function App() {
       await queryClient.invalidateQueries({ queryKey: ["me"] });
     }
   });
-  const autoHistorySync = useMutation({
-    mutationFn: () => syncHistoryInChunks(),
-    onSuccess: async (result) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
-        queryClient.invalidateQueries({ queryKey: ["integration-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
-        queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
-        queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
-        queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
-        queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
-      ]);
-      if (result.errors.length > 0) {
-        window.sessionStorage.removeItem(HISTORY_SYNC_SESSION_KEY);
-      }
-    },
-    onError: () => {
-      window.sessionStorage.removeItem(HISTORY_SYNC_SESSION_KEY);
-    }
-  });
   const autoExpensesImport = useMutation({
     mutationFn: () =>
       api<{ rowsReceived: number; rowsCreated: number; rowsUpdated: number }>("/api/imports/expenses-sheet", {
@@ -131,17 +108,6 @@ export function App() {
   });
 
   useEffect(() => {
-    if (!me.data || !overview.data) return;
-    const needsHistoryBootstrap =
-      overview.data.counts.salesDocuments < HISTORY_BOOTSTRAP_MIN_SALES ||
-      overview.data.counts.wasteRecords < HISTORY_BOOTSTRAP_MIN_WASTE;
-    if (!needsHistoryBootstrap) return;
-    if (autoHistorySync.status !== "idle" || window.sessionStorage.getItem(HISTORY_SYNC_SESSION_KEY)) return;
-    window.sessionStorage.setItem(HISTORY_SYNC_SESSION_KEY, "true");
-    autoHistorySync.mutate();
-  }, [autoHistorySync, me.data, overview.data]);
-
-  useEffect(() => {
     if (!me.data || !overview.data || overview.data.counts.expenses > 0) return;
     if (autoExpensesImport.status !== "idle" || window.sessionStorage.getItem(EXPENSES_IMPORT_SESSION_KEY)) return;
     window.sessionStorage.setItem(EXPENSES_IMPORT_SESSION_KEY, "true");
@@ -149,7 +115,7 @@ export function App() {
   }, [autoExpensesImport, me.data, overview.data]);
 
   useEffect(() => {
-    if (!me.data || autoHistorySync.status === "pending") return;
+    if (!canRunDulceHoraSync || !me.data) return;
 
     let cancelled = false;
     let running = false;
@@ -196,7 +162,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [autoHistorySync.status, me.data, queryClient]);
+  }, [canRunDulceHoraSync, me.data, queryClient]);
 
   if (setup.isLoading) {
     return <Splash text="Preparando Dulce Hora Control" />;
@@ -284,6 +250,7 @@ export function App() {
           <Route path="/mermas" element={<WastePage />} />
           <Route path="/finanzas" element={<FinancePage />} />
           <Route path="/cashflow" element={<CashflowPage />} />
+          <Route path="/analisis" element={<AnalysisPage />} />
           <Route path="/importaciones" element={<IntegrationPage />} />
           <Route path="/ajustes" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

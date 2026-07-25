@@ -273,6 +273,58 @@ export type HourPerformance = {
   }>;
 };
 
+export type AnalysisDashboard = {
+  range: {
+    from: string;
+    to: string;
+  };
+  filters: {
+    report: "hour" | "employee" | "weekday";
+    metric: "revenue" | "tickets" | "items";
+    weekday: number | null;
+    hourFrom: number;
+    hourTo: number;
+    employeeId: string | null;
+  };
+  summary: {
+    revenue: number;
+    documents: number;
+    tickets: number;
+    itemUnits: number;
+    averageTicket: number;
+    unitsPerTicket: number;
+    activeDays: number;
+  };
+  segments: Array<{
+    key: string;
+    label: string;
+    shortLabel: string;
+    color: string | null;
+    revenue: number;
+    documents: number;
+    tickets: number;
+    itemUnits: number;
+    averageTicket: number;
+    unitsPerTicket: number;
+    activeDays: number;
+    share: number;
+    ticketShare: number;
+  }>;
+  topProducts: Array<{
+    label: string;
+    category: string;
+    quantity: number;
+    revenue: number;
+    tickets: number;
+  }>;
+  employees: Array<{
+    id: string;
+    name: string;
+    role: string | null;
+    color: string | null;
+  }>;
+};
+
 export type FinanceDailyRow = {
   date: string;
   label: string;

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { CalendarSync, CheckCircle2, FileSpreadsheet, LockKeyhole, Server, Upload } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api } from "../api";
-import { syncHistoryInChunks, type SyncHistoryResult } from "../historySync";
+import { canRunDulceHoraSyncFromThisHost } from "../runtime";
 
 type IntegrationStatus = {
   phase: string;
@@ -65,11 +65,8 @@ type PortalSalesImportResult = {
 
 export function IntegrationPage() {
   const queryClient = useQueryClient();
+  const canRunDulceHoraSync = canRunDulceHoraSyncFromThisHost();
   const [date, setDate] = useState(() => todayArgentina());
-  const [historyProgress, setHistoryProgress] = useState<{
-    result: SyncHistoryResult;
-    chunk: { from: string; to: string; index: number; total: number; label?: string };
-  } | null>(null);
   const [portalForm, setPortalForm] = useState({
     provider: "pedidosya" as PortalProvider,
     paymentKind: "online" as PortalPaymentKind,
@@ -101,15 +98,6 @@ export function IntegrationPage() {
         queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
       ]);
-    }
-  });
-  const syncHistory = useMutation({
-    mutationFn: () =>
-      syncHistoryInChunks((result, chunk) => {
-        setHistoryProgress({ result, chunk });
-      }),
-    onSuccess: async () => {
-      await invalidateReporting(queryClient);
     }
   });
   const portalImport = useMutation({
@@ -182,7 +170,7 @@ export function IntegrationPage() {
           </label>
           <button
             className="primary-button"
-            disabled={sync.isPending || !status.data?.credentialsConfigured}
+            disabled={sync.isPending || !status.data?.credentialsConfigured || !canRunDulceHoraSync}
             onClick={() => sync.mutate()}
             type="button"
           >
@@ -197,9 +185,16 @@ export function IntegrationPage() {
             backend local.
           </p>
         ) : null}
+        {!canRunDulceHoraSync ? (
+          <div className="form-warning">
+            <strong>Sincronizacion desde ordenador</strong>
+            <span>
+              Para no consumir creditos de Netlify, la lectura de Dulce Hora se ejecuta desde la app local y se guarda en Neon.
+            </span>
+          </div>
+        ) : null}
 
         {sync.error ? <p className="form-error">{sync.error.message}</p> : null}
-        {syncHistory.error ? <p className="form-error">{syncHistory.error.message}</p> : null}
 
         {sync.data ? (
           <div className="sync-result">
@@ -223,72 +218,17 @@ export function IntegrationPage() {
           </div>
         ) : null}
 
-        <div className="sync-form">
-          <button
-            className="icon-text-button"
-            disabled={syncHistory.isPending || !status.data?.credentialsConfigured}
-            onClick={() => {
-              setHistoryProgress(null);
-              syncHistory.mutate();
-            }}
-            type="button"
-          >
-            <CalendarSync size={18} aria-hidden="true" />
-            {syncHistory.isPending ? "Sincronizando historial..." : "Sincronizar historial completo"}
-          </button>
+        <div className="form-warning">
+          <strong>Historial mensual</strong>
+          <span>
+            El historial completo se carga desde el ordenador con sincronizar-historial-neon.bat para evitar
+            timeouts y consumo de Netlify. Los meses cerrados quedan guardados en Neon y no se vuelven a leer.
+          </span>
+          <span>
+            Para el mes en curso usa sincronizar-mes-actual-neon.bat, o deja la app local abierta para que tome
+            el dia cada 15 minutos.
+          </span>
         </div>
-
-        {historyProgress ? (
-          <div className="sync-result">
-            <strong>
-              Historial: {historyProgress.chunk.index}/{historyProgress.chunk.total}
-            </strong>
-            {historyProgress.chunk.label ? <span>Etapa: {historyProgress.chunk.label}</span> : null}
-            <span>
-              Fecha en proceso: {historyProgress.chunk.from}
-              {historyProgress.chunk.to !== historyProgress.chunk.from ? ` a ${historyProgress.chunk.to}` : ""}
-            </span>
-            <span>{historyProgress.result.recordsReceived} comprobantes leidos</span>
-            <span>{historyProgress.result.itemRows} items</span>
-            <span>{historyProgress.result.wasteRecordsReceived} mermas leidas</span>
-            {historyProgress.result.errors.length > 0 ? (
-              <span>{historyProgress.result.errors.length} fechas con error</span>
-            ) : null}
-            {historyProgress.result.warnings?.length ? (
-              <span>{historyProgress.result.warnings.length} advertencias</span>
-            ) : null}
-          </div>
-        ) : null}
-
-        {historyProgress?.result.warnings?.length ? (
-          <div className="form-warning">
-            <strong>Advertencias</strong>
-            {historyProgress.result.warnings.slice(-5).map((message) => (
-              <span key={message}>{message}</span>
-            ))}
-          </div>
-        ) : null}
-
-        {historyProgress?.result.errors.length ? (
-          <div className="form-error">
-            <strong>Errores detectados</strong>
-            {historyProgress.result.errors.slice(-5).map((message) => (
-              <span key={message}>{message}</span>
-            ))}
-          </div>
-        ) : null}
-
-        {syncHistory.data ? (
-          <div className="sync-result">
-            <strong>Historial sincronizado</strong>
-            <span>{syncHistory.data.datesSynced} dias</span>
-            <span>{syncHistory.data.dateFrom ?? "-"} a {syncHistory.data.dateTo ?? "-"}</span>
-            <span>{syncHistory.data.recordsReceived} comprobantes leidos</span>
-            <span>{syncHistory.data.recordsCreated} nuevos</span>
-            <span>{syncHistory.data.recordsUpdated} actualizados</span>
-            <span>{syncHistory.data.wasteRecordsReceived} mermas leidas</span>
-          </div>
-        ) : null}
       </section>
 
       <section className="content-band">

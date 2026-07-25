@@ -924,6 +924,16 @@ async function ensureDefaultScheduleForMonth(
   });
 }
 
+export async function ensureDefaultScheduleCoverage(
+  organizationId: string,
+  branchId: string,
+  range: { from: string; to: string }
+) {
+  for (const month of monthsBetween(range.from, range.to)) {
+    await ensureDefaultScheduleForMonth(organizationId, branchId, month, monthRange(month));
+  }
+}
+
 async function removeLegacyDefaultSchedule(
   queryable: Queryable,
   branchId: string,
@@ -1440,6 +1450,19 @@ function datesBetween(from: string, to: string) {
     cursor.setDate(cursor.getDate() + 1);
   }
   return dates;
+}
+
+function monthsBetween(from: string, to: string) {
+  const months: string[] = [];
+  const [fromYear, fromMonth] = from.split("-").map(Number);
+  const [toYear, toMonth] = to.split("-").map(Number);
+  const cursor = new Date(Date.UTC(fromYear, fromMonth - 1, 1));
+  const end = new Date(Date.UTC(toYear, toMonth - 1, 1));
+  while (cursor <= end) {
+    months.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return months;
 }
 
 function weekdayLabel(date: string) {

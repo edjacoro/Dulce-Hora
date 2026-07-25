@@ -43,6 +43,28 @@ Para detener los servidores locales, usar `detener-app.bat`.
 
 En el primer ingreso la app muestra la configuracion inicial para crear el usuario owner. No hay credenciales por defecto.
 
+## Sincronizacion operativa con Neon
+
+La app online debe leer la base Postgres persistente configurada en `DATABASE_URL`. Para evitar timeouts de Netlify y no gastar ejecuciones serverless, el historial de Dulce Hora se sincroniza desde el ordenador local contra esa misma base Neon.
+
+Scripts de Windows incluidos:
+
+```text
+iniciar-app-online-neon.bat
+sincronizar-meses-cerrados-neon.bat
+sincronizar-mes-actual-neon.bat
+sincronizar-rango-neon.bat
+sincronizar-historial-neon.bat
+```
+
+Flujo recomendado:
+
+- Meses cerrados: ejecutar `sincronizar-meses-cerrados-neon.bat`. Los meses completos se guardan en `sync_period_locks` como `locked` y no se vuelven a leer.
+- Mes actual: ejecutar `sincronizar-mes-actual-neon.bat` cuando haga falta completar el mes vivo. La app local tambien sincroniza el dia actual cada 15 minutos mientras este abierta.
+- Rangos puntuales: usar `sincronizar-rango-neon.bat` para corregir una fecha o tramo especifico.
+
+No subir `.env.local` al repositorio. Las variables reales se cargan en Netlify y en el entorno local.
+
 ## Deploy en Netlify
 
 El repositorio incluye `netlify.toml` y una Function en `netlify/functions/api.ts`.

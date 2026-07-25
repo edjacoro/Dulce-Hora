@@ -21,7 +21,7 @@ import {
 import { registerCashflowRoutes } from "./cashflow.js";
 import { registerExpenseRoutes } from "./expenses.js";
 import { registerFinanceRoutes } from "./finance.js";
-import { registerScheduleRoutes } from "./schedule.js";
+import { ensureDefaultScheduleCoverage, registerScheduleRoutes } from "./schedule.js";
 
 export const app = express();
 const port = Number(process.env.PORT ?? 8787);
@@ -141,6 +141,21 @@ const corporateSaleSchema = z.object({
 type DateRange = {
   from: string | null;
   to: string | null;
+};
+
+type AnalysisReport = "hour" | "employee" | "weekday";
+
+type AnalysisMetric = "revenue" | "tickets" | "items";
+
+type AnalysisSegmentRow = {
+  segment_key: string;
+  label: string;
+  color: string | null;
+  revenue: string;
+  documents: string;
+  tickets: string;
+  item_units: string;
+  active_days: string;
 };
 
 const netTotal = "case when sd.status = 'credit_note' then -abs(sd.total) else sd.total end";
@@ -1136,6 +1151,261 @@ app.get("/api/hours/performance", requireAuth, async (req, res) => {
   });
 });
 
+app.get("/api/analysis/sales", requireAuth, async (req, res) => {
+  const organizationId = req.user!.organization_id;
+  const today = todayArgentinaDate();
+  const range = readAnalysisDateRange(req, today);
+  const report = readAnalysisReport(req);
+  const metric = readAnalysisMetric(req);
+  const weekday = readAnalysisWeekday(req);
+  const hourFrom = readAnalysisHour(req.query.hourFrom, 0);
+  const hourTo = readAnalysisHour(req.query.hourTo, 23);
+  const normalizedHourFrom = Math.min(hourFrom, hourTo);
+  const normalizedHourTo = Math.max(hourFrom, hourTo);
+  const employeeId =
+    typeof req.query.employeeId === "string" && req.query.employeeId && req.query.employeeId !== "all"
+      ? req.query.employeeId
+      : null;
+
+  const branch = await getDefaultBranch(organizationId);
+  if (!branch) {
+    res.status(400).json({ error: "No hay una sucursal activa para analizar ventas" });
+    return;
+  }
+
+  await ensureDefaultScheduleCoverage(organizationId, branch.id, range);
+
+  const params: unknown[] = [organizationId];
+  const filters = ["b.organization_id = $1", "sd.status <> 'credited'"];
+  addDateRangeFilter(filters, params, "sd.sale_date", range);
+
+  if (weekday !== null) {
+    params.push(weekday);
+    filters.push(`extract(dow from sd.sale_date)::int = $${params.length}`);
+  }
+
+  params.push(normalizedHourFrom);
+  filters.push(`sd.sale_time is not null and extract(hour from sd.sale_time)::int >= $${params.length}`);
+  params.push(normalizedHourTo);
+  filters.push(`extract(hour from sd.sale_time)::int <= $${params.length}`);
+
+  let employeeParamIndex: number | null = null;
+  if (employeeId) {
+    params.push(employeeId);
+    employeeParamIndex = params.length;
+    filters.push(
+      `exists (
+         select 1
+         from staff_shifts employee_filter_shift
+         join employees employee_filter_employee on employee_filter_employee.id = employee_filter_shift.employee_id
+         where employee_filter_shift.branch_id = sd.branch_id
+           and employee_filter_shift.shift_date = sd.sale_date
+           and employee_filter_employee.organization_id = $1
+           and employee_filter_employee.id = $${employeeParamIndex}
+           and employee_filter_shift.is_absence = false
+           and employee_filter_shift.start_time is not null
+           and employee_filter_shift.end_time is not null
+           and sd.sale_time >= employee_filter_shift.start_time
+           and sd.sale_time < employee_filter_shift.end_time
+       )`
+    );
+  }
+
+  const where = filters.join(" and ");
+  const documentsCte = `with documents as (
+    select sd.id,
+           sd.branch_id,
+           sd.sale_date,
+           sd.sale_time,
+           extract(dow from sd.sale_date)::int as weekday,
+           extract(hour from sd.sale_time)::int as sale_hour,
+           ${netTotal} as revenue,
+           case when sd.status = 'active' then 1 else 0 end as ticket_count,
+           coalesce((
+             select sum(si.quantity)
+             from sale_items si
+             where si.sales_document_id = sd.id
+           ), 0) as item_units
+    from sales_documents sd
+    join branches b on b.id = sd.branch_id
+    where ${where}
+  )`;
+
+  const [summary, segmentRows, topProducts, employees] = await Promise.all([
+    queryOne<{
+      revenue: string;
+      documents: string;
+      tickets: string;
+      item_units: string;
+      active_days: string;
+    }>(
+      `${documentsCte}
+       select coalesce(sum(revenue), 0)::text as revenue,
+              count(id)::text as documents,
+              coalesce(sum(ticket_count), 0)::text as tickets,
+              coalesce(sum(item_units), 0)::text as item_units,
+              count(distinct sale_date)::text as active_days
+       from documents`,
+      params
+    ),
+    report === "employee"
+      ? db.query<AnalysisSegmentRow>(
+          `${documentsCte}
+           select coalesce(e.id, 'unassigned') as segment_key,
+                  coalesce(e.name, 'Sin empleado asignado') as label,
+                  e.color,
+                  coalesce(sum(d.revenue), 0)::text as revenue,
+                  count(distinct d.id)::text as documents,
+                  coalesce(sum(d.ticket_count), 0)::text as tickets,
+                  coalesce(sum(d.item_units), 0)::text as item_units,
+                  count(distinct d.sale_date)::text as active_days
+           from documents d
+           left join staff_shifts ss
+             on ss.branch_id = d.branch_id
+            and ss.shift_date = d.sale_date
+            and ss.is_absence = false
+            and ss.start_time is not null
+            and ss.end_time is not null
+            and d.sale_time >= ss.start_time
+            and d.sale_time < ss.end_time
+            ${employeeParamIndex ? `and ss.employee_id = $${employeeParamIndex}` : ""}
+           left join employees e
+             on e.id = ss.employee_id
+            and e.organization_id = $1
+           group by coalesce(e.id, 'unassigned'), coalesce(e.name, 'Sin empleado asignado'), e.color
+           order by coalesce(sum(d.revenue), 0) desc, coalesce(sum(d.ticket_count), 0) desc, label`,
+          params
+        )
+      : report === "weekday"
+        ? db.query<AnalysisSegmentRow>(
+            `${documentsCte}
+             select weekday::text as segment_key,
+                    weekday::text as label,
+                    null::text as color,
+                    coalesce(sum(revenue), 0)::text as revenue,
+                    count(id)::text as documents,
+                    coalesce(sum(ticket_count), 0)::text as tickets,
+                    coalesce(sum(item_units), 0)::text as item_units,
+                    count(distinct sale_date)::text as active_days
+             from documents
+             group by weekday
+             order by weekday`,
+            params
+          )
+        : db.query<AnalysisSegmentRow>(
+            `${documentsCte}
+             select lpad(sale_hour::text, 2, '0') as segment_key,
+                    lpad(sale_hour::text, 2, '0') || ':00-' || lpad(sale_hour::text, 2, '0') || ':59' as label,
+                    null::text as color,
+                    coalesce(sum(revenue), 0)::text as revenue,
+                    count(id)::text as documents,
+                    coalesce(sum(ticket_count), 0)::text as tickets,
+                    coalesce(sum(item_units), 0)::text as item_units,
+                    count(distinct sale_date)::text as active_days
+             from documents
+             group by sale_hour
+             order by sale_hour`,
+            params
+          ),
+    db.query<{
+      label: string;
+      category: string;
+      quantity: string;
+      revenue: string;
+      tickets: string;
+    }>(
+      `${documentsCte}
+       select coalesce(p.canonical_name, si.original_name) as label,
+              coalesce(c.name, 'Sin categoria') as category,
+              coalesce(sum(si.quantity), 0)::text as quantity,
+              coalesce(sum(si.line_total), 0)::text as revenue,
+              count(distinct d.id)::text as tickets
+       from documents d
+       join sale_items si on si.sales_document_id = d.id
+       left join products p on p.id = si.normalized_product_id
+       left join categories c on c.id = p.category_id
+       group by coalesce(p.canonical_name, si.original_name), coalesce(c.name, 'Sin categoria')
+       order by coalesce(sum(si.line_total), 0) desc, coalesce(sum(si.quantity), 0) desc
+       limit 12`,
+      params
+    ),
+    db.query<{
+      id: string;
+      name: string;
+      role: string | null;
+      color: string | null;
+    }>(
+      `select id, name, role, color
+       from employees
+       where organization_id = $1
+         and active = true
+       order by name`,
+      [organizationId]
+    )
+  ]);
+
+  const summaryRevenue = toNumber(summary?.revenue);
+  const summaryTickets = toNumber(summary?.tickets);
+  const rows = segmentRows.rows.map((row) => {
+    const revenue = toNumber(row.revenue);
+    const tickets = toNumber(row.tickets);
+    const itemUnits = toNumber(row.item_units);
+    const label = report === "weekday" ? weekdayLabel(toNumber(row.segment_key)) : row.label;
+    const shortLabel = report === "weekday" ? weekdayShortLabel(toNumber(row.segment_key)) : label;
+    return {
+      key: row.segment_key,
+      label,
+      shortLabel,
+      color: row.color,
+      revenue,
+      documents: toNumber(row.documents),
+      tickets,
+      itemUnits,
+      averageTicket: tickets > 0 ? revenue / tickets : 0,
+      unitsPerTicket: tickets > 0 ? itemUnits / tickets : 0,
+      activeDays: toNumber(row.active_days)
+    };
+  });
+  const attributedRevenue = report === "employee" ? sum(rows.map((row) => row.revenue)) : summaryRevenue;
+  const attributedTickets = report === "employee" ? sum(rows.map((row) => row.tickets)) : summaryTickets;
+
+  res.json({
+    range,
+    filters: {
+      report,
+      metric,
+      weekday,
+      hourFrom: normalizedHourFrom,
+      hourTo: normalizedHourTo,
+      employeeId
+    },
+    summary: {
+      revenue: summaryRevenue,
+      documents: toNumber(summary?.documents),
+      tickets: summaryTickets,
+      itemUnits: toNumber(summary?.item_units),
+      averageTicket: summaryTickets > 0 ? summaryRevenue / summaryTickets : 0,
+      unitsPerTicket: summaryTickets > 0 ? toNumber(summary?.item_units) / summaryTickets : 0,
+      activeDays: toNumber(summary?.active_days)
+    },
+    segments: rows
+      .map((row) => ({
+        ...row,
+        share: attributedRevenue > 0 ? (row.revenue / attributedRevenue) * 100 : 0,
+        ticketShare: attributedTickets > 0 ? (row.tickets / attributedTickets) * 100 : 0
+      }))
+      .sort((a, b) => metricValue(b, metric) - metricValue(a, metric) || a.label.localeCompare(b.label)),
+    topProducts: topProducts.rows.map((row) => ({
+      label: row.label,
+      category: row.category,
+      quantity: toNumber(row.quantity),
+      revenue: toNumber(row.revenue),
+      tickets: toNumber(row.tickets)
+    })),
+    employees: employees.rows
+  });
+});
+
 app.get("/api/products/aliases", requireAuth, async (req, res) => {
   const rows = await db.query(
     `select p.id,
@@ -1696,6 +1966,57 @@ function sum(values: number[]) {
 function toNumber(value: unknown) {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function metricValue(row: { revenue: number; tickets: number; itemUnits: number }, metric: AnalysisMetric) {
+  if (metric === "tickets") return row.tickets;
+  if (metric === "items") return row.itemUnits;
+  return row.revenue;
+}
+
+function readAnalysisReport(req: express.Request): AnalysisReport {
+  const value = typeof req.query.report === "string" ? req.query.report : "";
+  return value === "employee" || value === "weekday" || value === "hour" ? value : "hour";
+}
+
+function readAnalysisMetric(req: express.Request): AnalysisMetric {
+  const value = typeof req.query.metric === "string" ? req.query.metric : "";
+  return value === "tickets" || value === "items" || value === "revenue" ? value : "revenue";
+}
+
+function readAnalysisDateRange(req: express.Request, today: string) {
+  const from = typeof req.query.from === "string" && isIsoDate(req.query.from)
+    ? req.query.from
+    : `${today.slice(0, 7)}-01`;
+  const to = typeof req.query.to === "string" && isIsoDate(req.query.to) ? req.query.to : today;
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+function readAnalysisWeekday(req: express.Request) {
+  if (req.query.weekday === undefined || req.query.weekday === "all") return null;
+  const value = Number(req.query.weekday);
+  return Number.isInteger(value) && value >= 0 && value <= 6 ? value : null;
+}
+
+function readAnalysisHour(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.min(23, Math.max(0, parsed));
+}
+
+function isIsoDate(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function todayArgentinaDate() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 function readableSyncError(error: unknown) {

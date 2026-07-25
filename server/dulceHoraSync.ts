@@ -95,6 +95,14 @@ export type SyncHistoryResult = SyncResult & {
   datesSynced: number;
 };
 
+export type SyncHistoryProgress = {
+  date: string;
+  recordsReceived: number;
+  itemRows: number;
+  wasteRecordsReceived: number;
+  datesSynced: number;
+};
+
 export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
   const credentials = getDulceHoraCredentials();
   if (!credentials) {
@@ -175,7 +183,12 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
 }
 
 export async function syncDulceHoraHistory(
-  input: Omit<SyncInput, "date"> & { dateFrom?: string | null; dateTo?: string | null; includeWaste?: boolean }
+  input: Omit<SyncInput, "date"> & {
+    dateFrom?: string | null;
+    dateTo?: string | null;
+    includeWaste?: boolean;
+    onDateSynced?: (progress: SyncHistoryProgress) => void | Promise<void>;
+  }
 ): Promise<SyncHistoryResult> {
   const credentials = getDulceHoraCredentials();
   if (!credentials) {
@@ -251,6 +264,13 @@ export async function syncDulceHoraHistory(
       result.wasteRecordsCreated += wasteResult.created;
       result.wasteRecordsUpdated += wasteResult.updated;
       if (entries.length > 0 || wasteResult.received > 0) result.datesSynced += 1;
+      await input.onDateSynced?.({
+        date,
+        recordsReceived: entries.length,
+        itemRows: result.itemRows,
+        wasteRecordsReceived: result.wasteRecordsReceived,
+        datesSynced: result.datesSynced
+      });
     }
 
     await finishRun(runId, "success", result);
@@ -899,7 +919,8 @@ async function ensureWasteProduct(
 
   await tx.query(
     `insert into product_aliases (id, product_id, source, external_name, external_id)
-     values ($1, $2, 'dulce-hora-waste', $3, $4)`,
+     values ($1, $2, 'dulce-hora-waste', $3, $4)
+     on conflict do nothing`,
     [randomUUID(), productId, record.productName, record.productExternalId]
   );
 
@@ -942,7 +963,8 @@ async function ensureProduct(
 
   await tx.query(
     `insert into product_aliases (id, product_id, source, external_name, external_id)
-     values ($1, $2, 'dulce-hora-panel', $3, $4)`,
+     values ($1, $2, 'dulce-hora-panel', $3, $4)
+     on conflict do nothing`,
     [randomUUID(), productId, item.originalName, item.externalProductId]
   );
 
@@ -985,11 +1007,9 @@ async function refreshProductName(
       [productId, targetProductId]
     );
     await tx.query(
-      `update product_aliases
-       set product_id = $2,
-           external_name = $3
+      `delete from product_aliases
        where product_id = $1 and source = 'dulce-hora-panel'`,
-      [productId, targetProductId, item.originalName]
+      [productId]
     );
     return;
   }
@@ -1001,12 +1021,6 @@ async function refreshProductName(
          category_id = $4
      where id = $1 and organization_id = $2`,
     [productId, organizationId, item.originalName, categoryId]
-  );
-  await tx.query(
-    `update product_aliases
-     set external_name = $2
-     where product_id = $1 and source = 'dulce-hora-panel'`,
-    [productId, item.originalName]
   );
 }
 

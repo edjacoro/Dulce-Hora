@@ -13,6 +13,9 @@
     "dev:web": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "sync:closed-months": "tsx scripts/sync-dulce-hora-periods.ts --mode=closed",
+    "sync:current-month": "tsx scripts/sync-dulce-hora-periods.ts --mode=current",
+    "sync:all": "tsx scripts/sync-dulce-hora-periods.ts --mode=all",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

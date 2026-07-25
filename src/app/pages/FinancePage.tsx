@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type FinanceDailyRow, type FinanceDashboard, type FinanceMonthRow } from "../api";
-import { syncHistoryInChunks } from "../historySync";
+import { canRunDulceHoraSyncFromThisHost } from "../runtime";
 
 type TabId =
   | "hoy"
@@ -49,6 +49,7 @@ const tabs: Array<{ id: TabId; label: string }> = [
 
 export function FinancePage() {
   const queryClient = useQueryClient();
+  const canRunDulceHoraSync = canRunDulceHoraSyncFromThisHost();
   const [activeTab, setActiveTab] = useState<TabId>("hoy");
   const [date, setDate] = useState(() => today());
   const [month, setMonth] = useState(() => today().slice(0, 7));
@@ -79,22 +80,6 @@ export function FinancePage() {
       ]);
     }
   });
-  const syncHistory = useMutation({
-    mutationFn: () => syncHistoryInChunks(),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
-        queryClient.invalidateQueries({ queryKey: ["integration-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
-        queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
-        queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
-      ]);
-      setActiveTab("mensual");
-    }
-  });
-
   const data = dashboard.data;
   const monthRow = useMemo(
     () => data?.monthlyRows.find((row) => row.month === data.month),
@@ -141,25 +126,14 @@ export function FinancePage() {
 
         <SyncPanel
           data={data}
-          pending={sync.isPending || syncHistory.isPending}
-          historyPending={syncHistory.isPending}
-          onSyncHistory={() => syncHistory.mutate()}
+          canSync={canRunDulceHoraSync}
+          pending={sync.isPending}
           onSync={() => sync.mutate(date)}
         />
       </div>
 
       {dashboard.isLoading ? <LoadingPanel /> : null}
       {dashboard.error ? <p className="form-error">{dashboard.error.message}</p> : null}
-      {syncHistory.error ? <p className="form-error">{syncHistory.error.message}</p> : null}
-      {syncHistory.data ? (
-        <div className="sync-result">
-          <strong>Historial sincronizado</strong>
-          <span>{syncHistory.data.datesSynced ?? 0} fechas</span>
-          <span>{syncHistory.data.recordsReceived} comprobantes</span>
-          <span>{syncHistory.data.recordsCreated} nuevos</span>
-          <span>{syncHistory.data.recordsUpdated} actualizados</span>
-        </div>
-      ) : null}
 
       {data ? (
         <>
@@ -240,15 +214,13 @@ function FinancePeriodNav({
 
 function SyncPanel({
   data,
+  canSync,
   pending,
-  historyPending,
-  onSyncHistory,
   onSync
 }: {
   data: FinanceDashboard | undefined;
+  canSync: boolean;
   pending: boolean;
-  historyPending: boolean;
-  onSyncHistory: () => void;
   onSync: () => void;
 }) {
   const lastRun = data?.syncRuns[0];
@@ -258,23 +230,23 @@ function SyncPanel({
       <span className={`sync-dot ${pending ? "pending" : connected ? "ok" : "off"}`} />
       <div>
         <strong>
-          {pending ? "Sincronizando Dulce Hora..." : connected ? "Dulce Hora conectado" : "Credenciales faltantes"}
+          {pending
+            ? "Sincronizando Dulce Hora..."
+            : !canSync
+              ? "Sincronizacion local"
+              : connected
+                ? "Dulce Hora conectado"
+                : "Credenciales faltantes"}
         </strong>
         <small>
-          {lastRun
+          {!canSync
+            ? "Ejecutar desde el ordenador para cuidar creditos de Netlify"
+            : lastRun
             ? `Ultima lectura: ${new Date(lastRun.started_at).toLocaleString("es-AR")}`
             : "Sin lecturas registradas"}
         </small>
       </div>
-      <button
-        className="secondary-button"
-        disabled={!connected || pending}
-        onClick={onSyncHistory}
-        type="button"
-      >
-        {historyPending ? "Sincronizando historial..." : "Sincronizar historial"}
-      </button>
-      <button className="secondary-button" disabled={!connected || pending} onClick={onSync} type="button">
+      <button className="secondary-button" disabled={!connected || pending || !canSync} onClick={onSync} type="button">
         Sincronizar ahora
       </button>
     </div>

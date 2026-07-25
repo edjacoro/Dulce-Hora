@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import type {
+  AnalysisDashboard,
   EmployeeRecord,
   ProductPerformance,
   SalesDocument,
@@ -175,6 +176,47 @@ export async function downloadProductsPdf(data: ProductPerformance, periodLabel:
     ])
   );
   report.save(`productos-${filenamePeriod(periodLabel)}.pdf`);
+}
+
+export async function downloadAnalysisPdf(data: AnalysisDashboard, periodLabel: string) {
+  const report = createReport("Analisis", periodLabel, "Lectura filtrada de ventas, turnos, productos y cobertura");
+  report.metrics([
+    { label: "Venta filtrada", value: formatCurrency(data.summary.revenue), tone: "red" },
+    { label: "Pedidos", value: formatInteger(data.summary.tickets), tone: "blue" },
+    { label: "Ticket promedio", value: formatCurrency(data.summary.averageTicket), tone: "green" },
+    { label: "Unidades", value: formatNumber(data.summary.itemUnits), tone: "amber" },
+    { label: "Unid./ticket", value: formatNumber(data.summary.unitsPerTicket), tone: "slate" }
+  ]);
+  report.bars(
+    `Segmentos por ${analysisMetricLabel(data.filters.metric).toLowerCase()}`,
+    data.segments.slice(0, 10).map((row) => ({
+      label: row.label,
+      value: analysisMetricValue(row, data.filters.metric),
+      detail: `${formatCurrency(row.revenue)} - ${formatInteger(row.tickets)} pedidos - ${formatNumber(row.itemUnits)} un.`
+    })),
+    (value) => formatAnalysisMetric(value, data.filters.metric)
+  );
+  report.bars(
+    "Productos destacados",
+    data.topProducts.slice(0, 10).map((row) => ({
+      label: row.label,
+      value: row.revenue,
+      detail: `${formatNumber(row.quantity)} un. - ${row.category}`
+    })),
+    formatCurrency
+  );
+  report.table(
+    "Detalle por segmento",
+    ["Segmento", "Venta", "Pedidos", "Unid.", "Ticket prom."],
+    data.segments.slice(0, 32).map((row) => [
+      row.label,
+      formatCurrency(row.revenue),
+      formatInteger(row.tickets),
+      formatNumber(row.itemUnits),
+      formatCurrency(row.averageTicket)
+    ])
+  );
+  report.save(`analisis-${filenamePeriod(periodLabel)}.pdf`);
 }
 
 export async function downloadSchedulePdf(data: ScheduleResponse, monthLabel: string) {
@@ -590,6 +632,24 @@ function modeLabel(mode: EmployeeRecord["scheduleTemplate"]["mode"]) {
 
 function trim(value: string, length: number) {
   return value.length > length ? `${value.slice(0, Math.max(0, length - 1))}.` : value;
+}
+
+function analysisMetricLabel(metric: AnalysisDashboard["filters"]["metric"]) {
+  if (metric === "tickets") return "Pedidos";
+  if (metric === "items") return "Unidades";
+  return "Dinero";
+}
+
+function analysisMetricValue(row: AnalysisDashboard["segments"][number], metric: AnalysisDashboard["filters"]["metric"]) {
+  if (metric === "tickets") return row.tickets;
+  if (metric === "items") return row.itemUnits;
+  return row.revenue;
+}
+
+function formatAnalysisMetric(value: number, metric: AnalysisDashboard["filters"]["metric"]) {
+  if (metric === "revenue") return formatCurrency(value);
+  if (metric === "tickets") return formatInteger(value);
+  return formatNumber(value);
 }
 
 function formatCurrency(value: number) {
