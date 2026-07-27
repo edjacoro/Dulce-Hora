@@ -45,7 +45,7 @@ En el primer ingreso la app muestra la configuracion inicial para crear el usuar
 
 ## Sincronizacion operativa con Neon
 
-La app online debe leer la base Postgres persistente configurada en `DATABASE_URL`. Para evitar timeouts de Netlify y no gastar ejecuciones serverless, el historial de Dulce Hora se sincroniza desde el ordenador local contra esa misma base Neon.
+La app online lee y escribe la base Postgres persistente configurada en `DATABASE_URL`. Netlify puede tomar una fecha puntual desde el portal de Dulce Hora, guardarla en Neon y dejarla disponible para todos los paneles.
 
 Scripts de Windows incluidos:
 
@@ -59,9 +59,10 @@ sincronizar-historial-neon.bat
 
 Flujo recomendado:
 
-- Meses cerrados: ejecutar `sincronizar-meses-cerrados-neon.bat`. Los meses completos se guardan en `sync_period_locks` como `locked` y no se vuelven a leer.
-- Mes actual: ejecutar `sincronizar-mes-actual-neon.bat` cuando haga falta completar el mes vivo. La app local tambien sincroniza el dia actual cada 15 minutos mientras este abierta.
-- Rangos puntuales: usar `sincronizar-rango-neon.bat` para corregir una fecha o tramo especifico.
+- Dia en curso: Netlify tiene una funcion programada `sync-today` que intenta actualizar las ventas del dia cada 15 minutos y guardarlas en Neon. Tambien se puede forzar manualmente desde Importaciones o Finanzas.
+- Dias ya importados: quedan guardados en Neon; no dependen del ordenador.
+- Meses cerrados: quedan registrados en `sync_period_locks` como `locked` y no hace falta volver a leerlos completos.
+- Herramientas locales: los `.bat` quedan como respaldo tecnico para reintentos grandes o mantenimiento, pero no son necesarios para operar la app online.
 
 No subir `.env.local` al repositorio. Las variables reales se cargan en Netlify y en el entorno local.
 

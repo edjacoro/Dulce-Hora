@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type FinanceDailyRow, type FinanceDashboard, type FinanceMonthRow } from "../api";
-import { canRunDulceHoraSyncFromThisHost } from "../runtime";
+import { canRunDulceHoraDateSyncFromThisHost } from "../runtime";
 
 type TabId =
   | "hoy"
@@ -49,9 +49,9 @@ const tabs: Array<{ id: TabId; label: string }> = [
 
 export function FinancePage() {
   const queryClient = useQueryClient();
-  const canRunDulceHoraSync = canRunDulceHoraSyncFromThisHost();
   const [activeTab, setActiveTab] = useState<TabId>("hoy");
   const [date, setDate] = useState(() => today());
+  const canRunDulceHoraSync = canRunDulceHoraDateSyncFromThisHost(date);
   const [month, setMonth] = useState(() => today().slice(0, 7));
   const updateDate = (nextDate: string) => {
     setDate(nextDate);
@@ -75,6 +75,9 @@ export function FinancePage() {
         queryClient.invalidateQueries({ queryKey: ["integration-status"] }),
         queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
         queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
+        queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
+        queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
+        queryClient.invalidateQueries({ queryKey: ["analysis-sales"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
       ]);
@@ -233,14 +236,14 @@ function SyncPanel({
           {pending
             ? "Sincronizando Dulce Hora..."
             : !canSync
-              ? "Sincronizacion local"
+              ? "Sincronizacion no disponible"
               : connected
                 ? "Dulce Hora conectado"
                 : "Credenciales faltantes"}
         </strong>
         <small>
           {!canSync
-            ? "Ejecutar desde el ordenador para cuidar creditos de Netlify"
+            ? "Revisar fecha o credenciales online"
             : lastRun
             ? `Ultima lectura: ${new Date(lastRun.started_at).toLocaleString("es-AR")}`
             : "Sin lecturas registradas"}

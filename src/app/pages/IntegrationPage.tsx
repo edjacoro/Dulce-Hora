@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { CalendarSync, CheckCircle2, FileSpreadsheet, LockKeyhole, Server, Upload } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api } from "../api";
-import { canRunDulceHoraSyncFromThisHost } from "../runtime";
+import { canRunDulceHoraDateSyncFromThisHost } from "../runtime";
 
 type IntegrationStatus = {
   phase: string;
@@ -65,8 +65,9 @@ type PortalSalesImportResult = {
 
 export function IntegrationPage() {
   const queryClient = useQueryClient();
-  const canRunDulceHoraSync = canRunDulceHoraSyncFromThisHost();
   const [date, setDate] = useState(() => todayArgentina());
+  const canRunSelectedDateSync = canRunDulceHoraDateSyncFromThisHost(date);
+  const selectedDateIsToday = date === todayArgentina();
   const [portalForm, setPortalForm] = useState({
     provider: "pedidosya" as PortalProvider,
     paymentKind: "online" as PortalPaymentKind,
@@ -95,6 +96,11 @@ export function IntegrationPage() {
         queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
         queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
         queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
+        queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
+        queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
+        queryClient.invalidateQueries({ queryKey: ["analysis-sales"] }),
+        queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
       ]);
@@ -170,7 +176,7 @@ export function IntegrationPage() {
           </label>
           <button
             className="primary-button"
-            disabled={sync.isPending || !status.data?.credentialsConfigured || !canRunDulceHoraSync}
+            disabled={sync.isPending || !status.data?.credentialsConfigured || !canRunSelectedDateSync}
             onClick={() => sync.mutate()}
             type="button"
           >
@@ -182,16 +188,11 @@ export function IntegrationPage() {
         {!status.data?.credentialsConfigured ? (
           <p className="form-error">
             Faltan las variables DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en el entorno del
-            backend local.
+            backend online.
           </p>
         ) : null}
-        {!canRunDulceHoraSync ? (
-          <div className="form-warning">
-            <strong>Sincronizacion desde ordenador</strong>
-            <span>
-              Para no consumir creditos de Netlify, la lectura de Dulce Hora se ejecuta desde la app local y se guarda en Neon.
-            </span>
-          </div>
+        {!canRunSelectedDateSync ? (
+          <p className="form-error">Esta fecha no esta habilitada para sincronizacion online.</p>
         ) : null}
 
         {sync.error ? <p className="form-error">{sync.error.message}</p> : null}
@@ -219,14 +220,14 @@ export function IntegrationPage() {
         ) : null}
 
         <div className="form-warning">
-          <strong>Historial mensual</strong>
+          <strong>Datos guardados en Neon</strong>
           <span>
-            El historial completo se carga desde el ordenador con sincronizar-historial-neon.bat para evitar
-            timeouts y consumo de Netlify. Los meses cerrados quedan guardados en Neon y no se vuelven a leer.
+            Los dias ya importados quedan guardados en Neon y la app los lee desde la base online.
           </span>
           <span>
-            Para el mes en curso usa sincronizar-mes-actual-neon.bat, o deja la app local abierta para que tome
-            el dia cada 15 minutos.
+            {selectedDateIsToday
+              ? "El dia en curso se puede tomar desde Dulce Hora y actualizar en Neon desde Netlify."
+              : "Para fechas anteriores, reintenta solo el dia que quieras corregir; no hace falta volver a cargar meses cerrados."}
           </span>
         </div>
       </section>

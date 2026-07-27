@@ -34,7 +34,7 @@ import { SalesPage } from "./pages/SalesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { WastePage } from "./pages/WastePage";
-import { canRunDulceHoraSyncFromThisHost } from "./runtime";
+import { canRunDulceHoraDateSyncFromThisHost } from "./runtime";
 
 const navItems = [
   { to: "/", label: "Inicio", icon: Home },
@@ -56,7 +56,7 @@ const EXPENSES_IMPORT_SESSION_KEY = "dulce-hora-auto-expenses-import-started-v2"
 
 export function App() {
   const queryClient = useQueryClient();
-  const canRunDulceHoraSync = canRunDulceHoraSyncFromThisHost();
+  const canRunDulceHoraTodaySync = canRunDulceHoraDateSyncFromThisHost(todayArgentina());
   const setup = useQuery({
     queryKey: ["setup-status"],
     queryFn: () => api<SetupStatus>("/api/setup/status")
@@ -115,7 +115,7 @@ export function App() {
   }, [autoExpensesImport, me.data, overview.data]);
 
   useEffect(() => {
-    if (!canRunDulceHoraSync || !me.data) return;
+    if (!canRunDulceHoraTodaySync || !me.data) return;
 
     let cancelled = false;
     let running = false;
@@ -130,6 +130,7 @@ export function App() {
         queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
         queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
         queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
+        queryClient.invalidateQueries({ queryKey: ["analysis-sales"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
       ]);
@@ -141,7 +142,7 @@ export function App() {
       try {
         await api("/api/integration/dulce-hora/sync-date", {
           method: "POST",
-          body: JSON.stringify({ date: todayArgentina() })
+          body: JSON.stringify({ date: todayArgentina(), includeWaste: false })
         });
         if (!cancelled) {
           await invalidateAfterSync();
@@ -162,7 +163,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [canRunDulceHoraSync, me.data, queryClient]);
+  }, [canRunDulceHoraTodaySync, me.data, queryClient]);
 
   if (setup.isLoading) {
     return <Splash text="Preparando Dulce Hora Control" />;

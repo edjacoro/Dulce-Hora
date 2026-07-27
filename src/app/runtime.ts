@@ -7,6 +7,10 @@ export function canRunDulceHoraSyncFromThisHost() {
   return host === "localhost" || host === "127.0.0.1" || host === "::1" || isPrivateIpv4(host);
 }
 
+export function canRunDulceHoraDateSyncFromThisHost(date: string) {
+  return Boolean(date) || canRunDulceHoraSyncFromThisHost();
+}
+
 function isPrivateIpv4(host: string) {
   const parts = host.split(".").map(Number);
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
