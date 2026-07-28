@@ -134,7 +134,8 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
   try {
     const loaded = await loadDateData(credentials, input.date, {
       includeWaste: input.includeWaste ?? true,
-      includeStatistics: input.includeStatistics
+      includeStatistics: input.includeStatistics,
+      branchId: input.branchId
     });
     result.warnings.push(...loaded.warnings);
     const statisticsEntries = loaded.statisticsEntries;
@@ -367,12 +368,9 @@ async function saveLoadedRegistryDocuments(
     }
   }
 
-  for (const entry of loaded.registryFallbackEntries) {
-    const parsed = parseListingDocument(entry, input.date);
-    const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
-    result.recordsCreated += upsert.created ? 1 : 0;
-    result.recordsUpdated += upsert.created ? 0 : 1;
-  }
+  const fallbackResult = await saveListingDocumentsBulk(input.branchId, input.date, loaded.registryFallbackEntries);
+  result.recordsCreated += fallbackResult.created;
+  result.recordsUpdated += fallbackResult.updated;
 
   if (loaded.registryFallbackEntries.length > 0) {
     result.warnings.push(
@@ -384,14 +382,79 @@ async function saveLoadedRegistryDocuments(
   result.errors.push(...loaded.registryErrors);
 }
 
+async function saveListingDocumentsBulk(branchId: string, date: string, entries: RegistryEntry[]) {
+  if (entries.length === 0) return { created: 0, updated: 0 };
+
+  const documents = entries.map((entry) => parseListingDocument(entry, date));
+  const externalIds = documents.map((document) => document.externalId);
+  const existing = await db.query<{ external_id: string }>(
+    `select external_id
+     from sales_documents
+     where branch_id = $1 and external_id = any($2::text[])`,
+    [branchId, externalIds]
+  );
+  const existingIds = new Set(existing.rows.map((row) => row.external_id));
+  const values: unknown[] = [];
+  const placeholders = documents.map((document, index) => {
+    const base = index * 14;
+    values.push(
+      randomUUID(),
+      branchId,
+      document.externalId,
+      `${branchId}|${document.externalId}`,
+      document.documentNumber,
+      document.documentType,
+      document.saleDate,
+      document.saleTime,
+      document.discount,
+      document.total,
+      document.paymentMethod,
+      document.status,
+      "dulce-hora-panel",
+      JSON.stringify(document.rawData)
+    );
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, null, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, $${base + 13}, $${base + 14}::jsonb)`;
+  });
+
+  await db.query(
+    `insert into sales_documents
+      (id, branch_id, external_id, dedupe_key, document_number, document_type, sale_date,
+       sale_time, subtotal, discount, total, payment_method, status, source, raw_data)
+     values ${placeholders.join(", ")}
+     on conflict (branch_id, external_id) where external_id is not null do update
+     set document_number = coalesce(excluded.document_number, sales_documents.document_number),
+         document_type = excluded.document_type,
+         sale_date = excluded.sale_date,
+         sale_time = excluded.sale_time,
+         subtotal = coalesce(excluded.subtotal, sales_documents.subtotal),
+         discount = excluded.discount,
+         total = excluded.total,
+         payment_method = excluded.payment_method,
+         status = excluded.status,
+         source = excluded.source,
+         raw_data = case
+           when sales_documents.raw_data ? 'detalle' then sales_documents.raw_data
+           else excluded.raw_data
+         end,
+         imported_at = now()`,
+    values
+  );
+
+  return {
+    created: documents.filter((document) => !existingIds.has(document.externalId)).length,
+    updated: documents.filter((document) => existingIds.has(document.externalId)).length
+  };
+}
+
 async function loadDateData(
   credentials: DulceHoraCredentials,
   date: string,
-  options: { includeWaste: boolean; includeStatistics?: boolean }
+  options: { includeWaste: boolean; includeStatistics?: boolean; branchId?: string }
 ): Promise<LoadedDateData> {
   return withDulceHoraSession(credentials, async (client) => {
     const warnings: string[] = [];
     const includeStatistics = options.includeStatistics ?? true;
+    const registryDetailLimit = readRegistryDetailLimit();
     const registryEntries = await client.fetchRegistry(date);
     const statistics = includeStatistics ? await fetchStatisticsSafely(client, warnings) : null;
     const wastePayload = options.includeWaste
@@ -399,7 +462,9 @@ async function loadDateData(
       : emptyWastePayload();
     const catalog = statistics
       ? await catalogFromStatistics(client, statistics, warnings)
-      : new Map<string, ProductCatalogItem>();
+      : registryDetailLimit > 0
+        ? await fetchCatalogSafely(client, warnings)
+        : new Map<string, ProductCatalogItem>();
     const statisticsEntries = statistics?.documents.filter((document) => documentDate(document) === date) ?? [];
     const loaded: LoadedDateData = {
       catalog,
@@ -413,17 +478,23 @@ async function loadDateData(
     };
 
     if (!includeStatistics) {
-      loaded.registryFallbackEntries.push(...registryEntries);
+      await loadRegistryDetails(client, loaded, registryEntries, options.branchId, registryDetailLimit);
       return loaded;
     }
 
     if (statisticsEntries.length > 0) {
       const statisticsKeys = new Set(statisticsEntries.map(statisticsEntryKey));
-      await loadRegistryDetails(client, loaded, registryEntries.filter((entry) => !statisticsKeys.has(registryEntryKey(entry))));
+      await loadRegistryDetails(
+        client,
+        loaded,
+        registryEntries.filter((entry) => !statisticsKeys.has(registryEntryKey(entry))),
+        options.branchId,
+        registryDetailLimit
+      );
       return loaded;
     }
 
-    await loadRegistryDetails(client, loaded, registryEntries);
+    await loadRegistryDetails(client, loaded, registryEntries, options.branchId, registryDetailLimit);
 
     return loaded;
   });
@@ -461,6 +532,18 @@ async function catalogFromStatistics(
   }
 }
 
+async function fetchCatalogSafely(client: DulceHoraClient, warnings: string[]) {
+  try {
+    return await client.fetchCatalog();
+  } catch (error) {
+    if (!isServerlessRuntime()) throw error;
+    warnings.push(
+      "No se pudo leer el catalogo completo de Dulce Hora; los productos se completaran en una sincronizacion posterior."
+    );
+    return new Map<string, ProductCatalogItem>();
+  }
+}
+
 async function fetchWastePayloadSafely(client: DulceHoraClient, warnings: string[]) {
   try {
     return await client.fetchWasteRecords();
@@ -483,14 +566,13 @@ function emptyWastePayload(): DulceHoraWastePayload {
 async function loadRegistryDetails(
   client: DulceHoraClient,
   loaded: LoadedDateData,
-  entries: RegistryEntry[]
+  entries: RegistryEntry[],
+  branchId?: string,
+  detailLimit = readRegistryDetailLimit()
 ) {
-  const detailLimit = readNonNegativeIntegerEnv(
-    "DULCE_HORA_MISSING_DETAIL_LIMIT",
-    isServerlessRuntime() ? 0 : 60
-  );
+  const prioritizedEntries = await prioritizeEntriesForDetail(branchId, entries);
 
-  for (const [index, entry] of entries.entries()) {
+  for (const [index, entry] of prioritizedEntries.entries()) {
     if (index >= detailLimit) {
       loaded.registryFallbackEntries.push(entry);
       continue;
@@ -508,6 +590,37 @@ async function loadRegistryDetails(
       loaded.registryErrors.push(error instanceof Error ? error.message : "Error desconocido");
     }
   }
+}
+
+function readRegistryDetailLimit() {
+  return readNonNegativeIntegerEnv(
+    "DULCE_HORA_MISSING_DETAIL_LIMIT",
+    isServerlessRuntime() ? 0 : 60
+  );
+}
+
+async function prioritizeEntriesForDetail(branchId: string | undefined, entries: RegistryEntry[]) {
+  if (!branchId || entries.length === 0) return entries;
+
+  const keys = entries.map((entry) => registryEntryKey(entry));
+  const rows = await db.query<{ external_id: string; item_count: string }>(
+    `select sd.external_id, count(si.id)::text as item_count
+     from sales_documents sd
+     left join sale_items si on si.sales_document_id = sd.id
+     where sd.branch_id = $1 and sd.external_id = any($2::text[])
+     group by sd.id, sd.external_id`,
+    [branchId, keys]
+  );
+  const itemCounts = new Map(rows.rows.map((row) => [row.external_id, Number(row.item_count)]));
+
+  return entries
+    .map((entry, index) => ({ entry, index, itemCount: itemCounts.get(registryEntryKey(entry)) }))
+    .sort((left, right) => {
+      const leftScore = left.itemCount === undefined ? 0 : left.itemCount === 0 ? 1 : 2;
+      const rightScore = right.itemCount === undefined ? 0 : right.itemCount === 0 ? 1 : 2;
+      return leftScore - rightScore || left.index - right.index;
+    })
+    .map((item) => item.entry);
 }
 
 function registryEntryKey(entry: RegistryEntry) {

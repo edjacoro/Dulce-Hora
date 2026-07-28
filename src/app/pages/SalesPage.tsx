@@ -81,6 +81,9 @@ export function SalesPage() {
   const stats = summary.data?.summary;
   const isDayMode = mode === "day";
   const activePeriodLabel = isDayMode ? formatFullDate(selectedDate) : `${from} al ${to}`;
+  const itemDetailCoverage = stats?.itemDetailCoverage ?? 1;
+  const itemDetailNote =
+    itemDetailCoverage < 0.99 ? `Detalle productos ${Math.round(itemDetailCoverage * 100)}%` : undefined;
 
   return (
     <section className="page-section">
@@ -133,12 +136,14 @@ export function SalesPage() {
           label="Articulos por ticket"
           value={formatNumber(stats?.unitsPerTicket ?? 0)}
           tone="amber"
+          note={itemDetailNote}
         />
         <Kpi
           icon={Coffee}
           label={isDayMode ? "Cafes del dia" : "Cafes del intervalo"}
           value={formatNumber(stats?.coffeeCount ?? 0)}
           tone="green"
+          note={itemDetailNote}
         />
       </div>
 
@@ -434,14 +439,16 @@ type KpiProps = {
   label: string;
   value: string | number;
   tone: "red" | "blue" | "green" | "amber";
+  note?: string;
 };
 
-function Kpi({ icon: Icon, label, value, tone }: KpiProps) {
+function Kpi({ icon: Icon, label, value, tone, note }: KpiProps) {
   return (
     <article className={`kpi-card ${tone}`}>
       <Icon size={20} aria-hidden="true" />
       <span>{label}</span>
       <strong>{value}</strong>
+      {note ? <small>{note}</small> : null}
     </article>
   );
 }

@@ -129,6 +129,8 @@ export type SalesSummary = {
     averageTicket: number;
     unitsPerTicket: number;
     coffeeCount: number;
+    itemDetailTickets: number;
+    itemDetailCoverage: number;
   };
   byDate: Array<{ label: string; total: string; documents: string }>;
   byPayment: Array<{ label: string; total: string; documents: string }>;

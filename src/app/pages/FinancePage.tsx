@@ -66,7 +66,7 @@ export function FinancePage() {
     mutationFn: (targetDate: string) =>
       api<SyncResult>("/api/integration/dulce-hora/sync-date", {
         method: "POST",
-        body: JSON.stringify({ date: targetDate })
+        body: JSON.stringify({ date: targetDate, includeWaste: false, includeStatistics: false })
       }),
     onSuccess: async () => {
       await Promise.all([

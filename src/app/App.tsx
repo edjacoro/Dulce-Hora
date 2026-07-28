@@ -142,7 +142,7 @@ export function App() {
       try {
         await api("/api/integration/dulce-hora/sync-date", {
           method: "POST",
-          body: JSON.stringify({ date: todayArgentina(), includeWaste: false })
+          body: JSON.stringify({ date: todayArgentina(), includeWaste: false, includeStatistics: false })
         });
         if (!cancelled) {
           await invalidateAfterSync();

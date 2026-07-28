@@ -88,7 +88,7 @@ export function IntegrationPage() {
     mutationFn: () =>
       api<SyncResult>("/api/integration/dulce-hora/sync-date", {
         method: "POST",
-        body: JSON.stringify({ date })
+        body: JSON.stringify({ date, includeWaste: false, includeStatistics: false })
       }),
     onSuccess: async () => {
       await Promise.all([
@@ -166,7 +166,7 @@ export function IntegrationPage() {
       <section className="content-band">
         <h2>
           <CalendarSync size={18} aria-hidden="true" />
-          Sincronizar facturacion y mermas por fecha
+          Sincronizar facturacion por fecha
         </h2>
 
         <div className="sync-form">
@@ -181,7 +181,7 @@ export function IntegrationPage() {
             type="button"
           >
             <CalendarSync size={18} aria-hidden="true" />
-            {sync.isPending ? "Sincronizando..." : "Tomar ventas y mermas desde Dulce Hora"}
+            {sync.isPending ? "Sincronizando..." : "Tomar ventas desde Dulce Hora"}
           </button>
         </div>
 

@@ -463,6 +463,12 @@ a {
   overflow-wrap: anywhere;
 }
 
+.kpi-card small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .kpi-card.red svg {
   color: var(--red);
 }

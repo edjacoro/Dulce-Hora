@@ -286,7 +286,7 @@ export class DulceHoraClient {
 }
 
 function defaultRequestDelayMs() {
-  return isServerlessRuntime() ? 150 : 600;
+  return isServerlessRuntime() ? 40 : 600;
 }
 
 function defaultRequestTimeoutMs() {

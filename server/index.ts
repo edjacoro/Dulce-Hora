@@ -565,13 +565,15 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
       tickets: string;
       item_units: string;
       coffee_units: string;
+      item_detail_tickets: string;
     }>(
       `select
          coalesce(sum(${netTotal}), 0)::text as net_sales,
          coalesce(sum(sd.total), 0)::text as gross_sales,
          count(sd.id)::text as documents,
          sum(case when sd.status = 'active' then 1 else 0 end)::text as tickets,
-         coalesce(sum((select count(si.id) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units,
+         coalesce(sum((select coalesce(sum(si.quantity), 0) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units,
+         coalesce(sum(case when exists (select 1 from sale_items si where si.sales_document_id = sd.id) then 1 else 0 end), 0)::text as item_detail_tickets,
          coalesce(sum((
            select coalesce(sum(
              case
@@ -643,6 +645,7 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
   const tickets = Number(summary?.tickets ?? 0);
   const itemUnits = Number(summary?.item_units ?? 0);
   const coffeeUnits = Number(summary?.coffee_units ?? 0);
+  const itemDetailTickets = Number(summary?.item_detail_tickets ?? 0);
 
   res.json({
     range,
@@ -653,7 +656,9 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
       tickets,
       averageTicket: tickets > 0 ? netSales / tickets : 0,
       unitsPerTicket: tickets > 0 ? itemUnits / tickets : 0,
-      coffeeCount: coffeeUnits
+      coffeeCount: coffeeUnits,
+      itemDetailTickets,
+      itemDetailCoverage: tickets > 0 ? itemDetailTickets / tickets : 1
     },
     byDate: byDate.rows,
     byPayment: byPayment.rows,
@@ -1747,8 +1752,8 @@ app.post(
         organizationId: req.user!.organization_id,
         userId: req.user!.id,
         date: input.date,
-        includeWaste: input.includeWaste,
-        includeStatistics: input.includeStatistics
+        includeWaste: input.includeWaste ?? !isServerlessBackend(),
+        includeStatistics: input.includeStatistics ?? !isServerlessBackend()
       });
 
       res.status(201).json({ ...result, branch });
@@ -2053,6 +2058,14 @@ function syncErrorStatus(error: unknown) {
     return 502;
   }
   return 500;
+}
+
+function isServerlessBackend() {
+  return (
+    process.env.DULCE_HORA_SERVERLESS === "true" ||
+    process.env.NETLIFY === "true" ||
+    Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT)
+  );
 }
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

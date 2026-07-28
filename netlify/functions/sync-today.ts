@@ -58,7 +58,8 @@ export const handler: Handler = async () => {
       organizationId: organization.id,
       userId: user.id,
       date: todayArgentina(),
-      includeWaste: false
+      includeWaste: false,
+      includeStatistics: false
     });
 
     return json(200, {
