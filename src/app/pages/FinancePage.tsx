@@ -68,7 +68,7 @@ export function FinancePage() {
         method: "POST",
         body: JSON.stringify({ date: targetDate, includeWaste: false, includeStatistics: false })
       }),
-    onSuccess: async () => {
+    onSuccess: async (_result, targetDate) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
@@ -81,6 +81,23 @@ export function FinancePage() {
         queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
       ]);
+      void api<SyncResult>("/api/integration/dulce-hora/hydrate-date-details", {
+        method: "POST",
+        body: JSON.stringify({ date: targetDate, limit: 3 })
+      })
+        .then(() =>
+          Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
+            queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
+            queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
+            queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
+            queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
+            queryClient.invalidateQueries({ queryKey: ["analysis-sales"] })
+          ])
+        )
+        .catch((error) => {
+          console.warn("[dulce-hora] No se pudo completar productos", error);
+        });
     }
   });
   const data = dashboard.data;

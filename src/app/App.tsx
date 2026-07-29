@@ -139,14 +139,26 @@ export function App() {
     const syncToday = async () => {
       if (running) return;
       running = true;
+      const syncDate = todayArgentina();
       try {
         await api("/api/integration/dulce-hora/sync-date", {
           method: "POST",
-          body: JSON.stringify({ date: todayArgentina(), includeWaste: false, includeStatistics: false })
+          body: JSON.stringify({ date: syncDate, includeWaste: false, includeStatistics: false })
         });
         if (!cancelled) {
           await invalidateAfterSync();
         }
+        void api("/api/integration/dulce-hora/hydrate-date-details", {
+          method: "POST",
+          body: JSON.stringify({ date: syncDate, limit: 3 })
+        })
+          .then(() => {
+            if (!cancelled) return invalidateAfterSync();
+            return undefined;
+          })
+          .catch((error) => {
+            console.warn("[dulce-hora] No se pudo completar productos automaticamente", error);
+          });
       } catch (error) {
         console.warn("[dulce-hora] No se pudo sincronizar automaticamente el dia", error);
       } finally {

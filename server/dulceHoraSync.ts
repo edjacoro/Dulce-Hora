@@ -22,6 +22,10 @@ type SyncInput = {
   includeStatistics?: boolean;
 };
 
+type DetailHydrationInput = SyncInput & {
+  limit?: number;
+};
+
 type ParsedItem = {
   externalProductId: string;
   source: "product" | "custom";
@@ -171,6 +175,85 @@ export async function syncDulceHoraDate(input: SyncInput): Promise<SyncResult> {
     result.wasteRecordsReceived = wasteResult.received;
     result.wasteRecordsCreated = wasteResult.created;
     result.wasteRecordsUpdated = wasteResult.updated;
+
+    await finishRun(runId, "success", result);
+    await auditSync(input.organizationId, input.userId, runId, result);
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Error desconocido";
+    result.errors.push(message);
+    await finishRun(runId, "failed", result, message);
+    throw error;
+  }
+}
+
+export async function hydrateDulceHoraDateDetails(input: DetailHydrationInput): Promise<SyncResult> {
+  const credentials = getDulceHoraCredentials();
+  if (!credentials) {
+    throw new Error("Faltan DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en el entorno del backend");
+  }
+
+  const runId = randomUUID();
+  await db.query(
+    `insert into sync_runs (id, branch_id, integration, status)
+     values ($1, $2, 'dulce-hora-panel-details', 'running')`,
+    [runId, input.branchId]
+  );
+
+  const result: SyncResult = {
+    runId,
+    date: input.date,
+    recordsReceived: 0,
+    recordsCreated: 0,
+    recordsUpdated: 0,
+    recordsRejected: 0,
+    itemRows: 0,
+    wasteRecordsReceived: 0,
+    wasteRecordsCreated: 0,
+    wasteRecordsUpdated: 0,
+    errors: [],
+    warnings: []
+  };
+
+  try {
+    await withDulceHoraSession(credentials, async (client) => {
+      const limit = readDetailHydrationLimit(input.limit);
+      let { entries: candidates, totalMissing } = await entriesNeedingDetailFromDatabase(input.branchId, input.date);
+      if (candidates.length === 0 && totalMissing === 0) {
+        const registryEntries = await client.fetchRegistry(input.date);
+        result.recordsReceived = registryEntries.length;
+        candidates = await entriesNeedingDetail(input.branchId, registryEntries);
+        totalMissing = candidates.length;
+      } else {
+        result.recordsReceived = totalMissing;
+      }
+      const selectedEntries = candidates.slice(0, limit);
+      const catalog = await catalogFromDatabase(input.organizationId);
+
+      for (const entry of selectedEntries) {
+        try {
+          const document = await fetchDocumentWithRetry(client, entry);
+          const parsed = parseDocument(document, input.date, catalog);
+          const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
+          result.recordsCreated += upsert.created ? 1 : 0;
+          result.recordsUpdated += upsert.created ? 0 : 1;
+          result.itemRows += parsed.items.length;
+        } catch (error) {
+          if (error instanceof DulceHoraAuthenticationError) throw error;
+          if (error instanceof DulceHoraRateLimitError) {
+            result.warnings.push("Dulce Hora limito temporalmente la lectura de detalles; se continua en la proxima pasada.");
+            break;
+          }
+          result.recordsRejected += 1;
+          result.errors.push(error instanceof Error ? error.message : "Error desconocido");
+        }
+      }
+
+      const remaining = Math.max(0, totalMissing - selectedEntries.length);
+      if (remaining > 0) {
+        result.warnings.push(`Quedan ${remaining} comprobantes sin detalle de productos; se completan en proximas sincronizaciones.`);
+      }
+    });
 
     await finishRun(runId, "success", result);
     await auditSync(input.organizationId, input.userId, runId, result);
@@ -621,6 +704,97 @@ async function prioritizeEntriesForDetail(branchId: string | undefined, entries:
       return leftScore - rightScore || left.index - right.index;
     })
     .map((item) => item.entry);
+}
+
+async function entriesNeedingDetail(branchId: string, entries: RegistryEntry[]) {
+  if (entries.length === 0) return entries;
+
+  const keys = entries.map((entry) => registryEntryKey(entry));
+  const rows = await db.query<{ external_id: string; item_count: string }>(
+    `select sd.external_id, count(si.id)::text as item_count
+     from sales_documents sd
+     left join sale_items si on si.sales_document_id = sd.id
+     where sd.branch_id = $1 and sd.external_id = any($2::text[])
+     group by sd.id, sd.external_id`,
+    [branchId, keys]
+  );
+  const itemCounts = new Map(rows.rows.map((row) => [row.external_id, Number(row.item_count)]));
+
+  return entries.filter((entry) => {
+    const itemCount = itemCounts.get(registryEntryKey(entry));
+    return itemCount === undefined || itemCount === 0;
+  });
+}
+
+async function entriesNeedingDetailFromDatabase(
+  branchId: string,
+  date: string
+): Promise<{ totalMissing: number; entries: RegistryEntry[] }> {
+  const rows = await db.query<{ external_id: string; total_missing: string }>(
+    `select sd.external_id,
+            count(*) over()::text as total_missing
+     from sales_documents sd
+     where sd.branch_id = $1
+       and sd.sale_date = $2
+       and sd.source = 'dulce-hora-panel'
+       and sd.external_id is not null
+       and sd.external_id ~ '^[A-Z]:'
+       and not exists (
+         select 1
+         from sale_items si
+         where si.sales_document_id = sd.id
+       )
+     order by sd.sale_time nulls last, sd.imported_at, sd.external_id`,
+    [branchId, date]
+  );
+  return {
+    totalMissing: Number(rows.rows[0]?.total_missing ?? 0),
+    entries: rows.rows.map((row) => {
+      const separator = row.external_id.indexOf(":");
+      return {
+        displayType: row.external_id.slice(0, separator),
+        externalId: row.external_id.slice(separator + 1),
+        cells: []
+      };
+    })
+  };
+}
+
+async function catalogFromDatabase(organizationId: string): Promise<Map<string, ProductCatalogItem>> {
+  const rows = await db.query<{
+    external_id: string | null;
+    canonical_name: string;
+    category: string | null;
+  }>(
+    `select pa.external_id, p.canonical_name, c.name as category
+     from product_aliases pa
+     join products p on p.id = pa.product_id
+     left join categories c on c.id = p.category_id
+     where p.organization_id = $1
+       and pa.source = 'dulce-hora-panel'
+       and pa.external_id is not null`,
+    [organizationId]
+  );
+  const catalog = new Map<string, ProductCatalogItem>();
+  for (const row of rows.rows) {
+    if (!row.external_id) continue;
+    const [source, id] = row.external_id.split(":", 2);
+    if ((source !== "product" && source !== "custom") || !id) continue;
+    catalog.set(row.external_id, {
+      source,
+      id,
+      name: row.canonical_name,
+      category: row.category ?? undefined
+    });
+  }
+  return catalog;
+}
+
+function readDetailHydrationLimit(inputLimit?: number) {
+  if (inputLimit !== undefined && Number.isFinite(inputLimit) && inputLimit >= 0) {
+    return Math.floor(inputLimit);
+  }
+  return readNonNegativeIntegerEnv("DULCE_HORA_DETAIL_HYDRATION_LIMIT", isServerlessRuntime() ? 3 : 80);
 }
 
 function registryEntryKey(entry: RegistryEntry) {

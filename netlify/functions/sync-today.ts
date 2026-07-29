@@ -1,6 +1,6 @@
 import type { Config, Handler } from "@netlify/functions";
 import { db, migrate, queryOne } from "../../server/db.js";
-import { getDefaultBranch, syncDulceHoraDate } from "../../server/dulceHoraSync.js";
+import { getDefaultBranch, hydrateDulceHoraDateDetails, syncDulceHoraDate } from "../../server/dulceHoraSync.js";
 
 process.env.DULCE_HORA_SERVERLESS = "true";
 process.env.NETLIFY = process.env.NETLIFY ?? "true";
@@ -53,13 +53,21 @@ export const handler: Handler = async () => {
     );
     if (Number(running?.count ?? 0) > 0) return json(200, { ok: true, skipped: "sync-running" });
 
+    const date = todayArgentina();
     const result = await syncDulceHoraDate({
       branchId: branch.id,
       organizationId: organization.id,
       userId: user.id,
-      date: todayArgentina(),
+      date,
       includeWaste: false,
       includeStatistics: false
+    });
+    const detailResult = await hydrateDulceHoraDateDetails({
+      branchId: branch.id,
+      organizationId: organization.id,
+      userId: user.id,
+      date,
+      limit: Number(process.env.DULCE_HORA_SCHEDULED_DETAIL_LIMIT ?? 3)
     });
 
     return json(200, {
@@ -68,7 +76,9 @@ export const handler: Handler = async () => {
       recordsReceived: result.recordsReceived,
       recordsCreated: result.recordsCreated,
       recordsUpdated: result.recordsUpdated,
-      itemRows: result.itemRows
+      itemRows: detailResult.itemRows,
+      detailRecordsUpdated: detailResult.recordsUpdated,
+      detailWarnings: detailResult.warnings
     });
   } catch (error) {
     console.error("[scheduled-sync-today]", error);

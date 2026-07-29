@@ -14,6 +14,7 @@ import { db, migrate, queryOne } from "./db.js";
 import { dulceHoraCredentialsConfigured } from "./dulceHoraClient.js";
 import {
   getDefaultBranch,
+  hydrateDulceHoraDateDetails,
   syncDulceHoraDate,
   syncDulceHoraHistory,
   syncDulceHoraWasteHistory
@@ -90,6 +91,11 @@ const syncDateSchema = z.object({
   branchId: z.string().optional(),
   includeWaste: z.boolean().optional(),
   includeStatistics: z.boolean().optional()
+});
+const hydrateDateDetailsSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  branchId: z.string().optional(),
+  limit: z.number().int().min(0).max(250).optional()
 });
 const syncHistorySchema = z.object({
   branchId: z.string().optional(),
@@ -572,7 +578,7 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
          coalesce(sum(sd.total), 0)::text as gross_sales,
          count(sd.id)::text as documents,
          sum(case when sd.status = 'active' then 1 else 0 end)::text as tickets,
-         coalesce(sum((select coalesce(sum(si.quantity), 0) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units,
+         coalesce(sum((select count(si.id) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units,
          coalesce(sum(case when exists (select 1 from sale_items si where si.sales_document_id = sd.id) then 1 else 0 end), 0)::text as item_detail_tickets,
          coalesce(sum((
            select coalesce(sum(
@@ -655,7 +661,7 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
       documents: Number(summary?.documents ?? 0),
       tickets,
       averageTicket: tickets > 0 ? netSales / tickets : 0,
-      unitsPerTicket: tickets > 0 ? itemUnits / tickets : 0,
+      unitsPerTicket: itemDetailTickets > 0 ? itemUnits / itemDetailTickets : 0,
       coffeeCount: coffeeUnits,
       itemDetailTickets,
       itemDetailCoverage: tickets > 0 ? itemDetailTickets / tickets : 1
@@ -911,7 +917,7 @@ app.get("/api/hours/performance", requireAuth, async (req, res) => {
                 case when sd.status = 'active' then 1 else 0 end as ticket_count,
                 sd.sale_date,
                 coalesce((
-                  select sum(si.quantity)
+                  select count(si.id)
                   from sale_items si
                   where si.sales_document_id = sd.id
                 ), 0) as item_units
@@ -945,7 +951,7 @@ app.get("/api/hours/performance", requireAuth, async (req, res) => {
                 case when sd.status = 'active' then 1 else 0 end as ticket_count,
                 sd.sale_date,
                 coalesce((
-                  select sum(si.quantity)
+                  select count(si.id)
                   from sale_items si
                   where si.sales_document_id = sd.id
                 ), 0) as item_units
@@ -1002,7 +1008,7 @@ app.get("/api/hours/performance", requireAuth, async (req, res) => {
                 case when sd.status = 'active' then 1 else 0 end as ticket_count,
                 sd.sale_date,
                 coalesce((
-                  select sum(si.quantity)
+                  select count(si.id)
                   from sale_items si
                   where si.sales_document_id = sd.id
                 ), 0) as item_units
@@ -1227,7 +1233,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
            ${netTotal} as revenue,
            case when sd.status = 'active' then 1 else 0 end as ticket_count,
            coalesce((
-             select sum(si.quantity)
+             select count(si.id)
              from sale_items si
              where si.sales_document_id = sd.id
            ), 0) as item_units
@@ -1760,6 +1766,43 @@ app.post(
     } catch (error) {
       const message = readableSyncError(error);
       console.error("[dulce-hora:sync-date]", message, error);
+      res.status(syncErrorStatus(error)).json({ error: message });
+    }
+  }
+);
+
+app.post(
+  "/api/integration/dulce-hora/hydrate-date-details",
+  requireRole(["owner", "administrator", "manager"]),
+  async (req, res) => {
+    const input = hydrateDateDetailsSchema.parse(req.body);
+    const branch = input.branchId
+      ? await queryOne<{ id: string; name: string }>(
+          `select id, name
+           from branches
+           where id = $1 and organization_id = $2 and active = true`,
+          [input.branchId, req.user!.organization_id]
+        )
+      : await getDefaultBranch(req.user!.organization_id);
+
+    if (!branch) {
+      res.status(400).json({ error: "No hay una sucursal activa para completar productos" });
+      return;
+    }
+
+    try {
+      const result = await hydrateDulceHoraDateDetails({
+        branchId: branch.id,
+        organizationId: req.user!.organization_id,
+        userId: req.user!.id,
+        date: input.date,
+        limit: input.limit
+      });
+
+      res.status(201).json({ ...result, branch });
+    } catch (error) {
+      const message = readableSyncError(error);
+      console.error("[dulce-hora:hydrate-date-details]", message, error);
       res.status(syncErrorStatus(error)).json({ error: message });
     }
   }

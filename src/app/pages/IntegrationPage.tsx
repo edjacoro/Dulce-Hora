@@ -104,6 +104,23 @@ export function IntegrationPage() {
         queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
         queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
       ]);
+      void api<SyncResult>("/api/integration/dulce-hora/hydrate-date-details", {
+        method: "POST",
+        body: JSON.stringify({ date, limit: 3 })
+      })
+        .then(() =>
+          Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
+            queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
+            queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
+            queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
+            queryClient.invalidateQueries({ queryKey: ["analysis-sales"] }),
+            queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] })
+          ])
+        )
+        .catch((error) => {
+          console.warn("[dulce-hora] No se pudo completar productos", error);
+        });
     }
   });
   const portalImport = useMutation({

@@ -152,7 +152,7 @@ async function salesAggregateByDate(organizationId: string, date: string) {
        coalesce(sum(${netTotal}), 0)::text as sales,
        count(sd.id)::text as documents,
        sum(case when sd.status = 'active' then 1 else 0 end)::text as tickets,
-       coalesce(sum((select coalesce(sum(si.quantity), 0) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units
+       coalesce(sum((select count(si.id) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units
      from sales_documents sd
      join branches b on b.id = sd.branch_id
      where b.organization_id = $1
@@ -168,7 +168,7 @@ async function salesByDay(organizationId: string, range: DateRange) {
             coalesce(sum(${netTotal}), 0)::text as sales,
             count(sd.id)::text as documents,
             sum(case when sd.status = 'active' then 1 else 0 end)::text as tickets,
-            coalesce(sum((select coalesce(sum(si.quantity), 0) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units
+            coalesce(sum((select count(si.id) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units
      from sales_documents sd
      join branches b on b.id = sd.branch_id
      where b.organization_id = $1
@@ -187,7 +187,7 @@ async function salesByMonth(organizationId: string) {
             coalesce(sum(${netTotal}), 0)::text as sales,
             count(sd.id)::text as documents,
             sum(case when sd.status = 'active' then 1 else 0 end)::text as tickets,
-            coalesce(sum((select coalesce(sum(si.quantity), 0) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units,
+            coalesce(sum((select count(si.id) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units,
             count(distinct sd.sale_date)::text as days_with_sales
      from sales_documents sd
      join branches b on b.id = sd.branch_id
