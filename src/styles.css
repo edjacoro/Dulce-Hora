@@ -20,10 +20,18 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
   background: var(--bg);
   color: var(--text);
 }
@@ -294,18 +302,22 @@ a {
 
 .app-frame {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: clamp(230px, 17vw, 280px) minmax(0, 1fr);
 }
 
 .sidebar {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 18px;
   padding: 18px;
+  overflow: hidden;
   background: #111214;
   color: #fff;
 }
@@ -332,6 +344,25 @@ a {
 .nav-list {
   display: grid;
   gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 3px;
+  scrollbar-width: thin;
+  scrollbar-color: #4b5057 transparent;
+}
+
+.nav-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.nav-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #4b5057;
+}
+
+.nav-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .nav-item {
@@ -355,6 +386,7 @@ a {
   margin-top: auto;
   display: grid;
   gap: 10px;
+  flex: 0 0 auto;
 }
 
 .user-chip {
@@ -393,6 +425,8 @@ a {
 
 .main-panel {
   min-width: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr;
 }
@@ -418,11 +452,12 @@ a {
 .page-section {
   display: grid;
   gap: 18px;
-  padding: 24px;
+  padding: clamp(16px, 2vw, 28px);
 }
 
 .page-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -1980,16 +2015,25 @@ a {
   }
 
   .sidebar {
-    position: static;
+    position: sticky;
+    z-index: 30;
+    top: 0;
     height: auto;
+    max-height: 100vh;
+    max-height: 100dvh;
+    gap: 12px;
+    padding: 12px 16px;
   }
 
   .nav-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    max-height: min(42vh, 260px);
+    max-height: min(42dvh, 260px);
   }
 
   .sidebar-footer {
     grid-template-columns: 1fr auto;
+    align-items: center;
   }
 
   .icon-text-button {
@@ -2020,6 +2064,44 @@ a {
   .auth-panel,
   .page-section {
     padding: 16px;
+  }
+
+  .sidebar {
+    padding: 10px 12px;
+  }
+
+  .brand {
+    padding-bottom: 10px;
+  }
+
+  .brand-logo {
+    width: 38px;
+    height: 38px;
+  }
+
+  .nav-list {
+    max-height: min(44vh, 340px);
+    max-height: min(44dvh, 340px);
+  }
+
+  .nav-item {
+    min-height: 38px;
+    padding: 8px 10px;
+  }
+
+  .user-chip {
+    min-width: 0;
+  }
+
+  .user-chip span {
+    min-width: 0;
+  }
+
+  .user-chip strong,
+  .user-chip small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .form-grid,
