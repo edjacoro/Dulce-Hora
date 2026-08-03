@@ -91,6 +91,7 @@ export type SyncResult = {
   wasteRecordsUpdated: number;
   errors: string[];
   warnings: string[];
+  detailRecordsRemaining?: number;
 };
 
 export type SyncHistoryResult = SyncResult & {
@@ -229,6 +230,7 @@ export async function hydrateDulceHoraDateDetails(input: DetailHydrationInput): 
       }
       const selectedEntries = candidates.slice(0, limit);
       const catalog = await catalogFromDatabase(input.organizationId);
+      let completedDetailRecords = 0;
 
       for (const entry of selectedEntries) {
         try {
@@ -238,6 +240,7 @@ export async function hydrateDulceHoraDateDetails(input: DetailHydrationInput): 
           result.recordsCreated += upsert.created ? 1 : 0;
           result.recordsUpdated += upsert.created ? 0 : 1;
           result.itemRows += parsed.items.length;
+          completedDetailRecords += 1;
         } catch (error) {
           if (error instanceof DulceHoraAuthenticationError) throw error;
           if (error instanceof DulceHoraRateLimitError) {
@@ -249,7 +252,8 @@ export async function hydrateDulceHoraDateDetails(input: DetailHydrationInput): 
         }
       }
 
-      const remaining = Math.max(0, totalMissing - selectedEntries.length);
+      const remaining = Math.max(0, totalMissing - completedDetailRecords);
+      result.detailRecordsRemaining = remaining;
       if (remaining > 0) {
         result.warnings.push(`Quedan ${remaining} comprobantes sin detalle de productos; se completan en proximas sincronizaciones.`);
       }

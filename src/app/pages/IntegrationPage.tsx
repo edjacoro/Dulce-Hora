@@ -1,7 +1,8 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarSync, CheckCircle2, FileSpreadsheet, LockKeyhole, Server, Upload } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api } from "../api";
+import { hydrateDulceHoraDetailsUntilDone, invalidateDulceHoraReporting } from "../dulceHoraDetails";
 import { canRunDulceHoraDateSyncFromThisHost } from "../runtime";
 
 type IntegrationStatus = {
@@ -39,6 +40,7 @@ type SyncResult = {
   wasteRecordsUpdated: number;
   errors: string[];
   warnings?: string[];
+  detailRecordsRemaining?: number;
 };
 
 type PortalProvider = "pedidosya" | "rappi" | "otro";
@@ -79,6 +81,13 @@ export function IntegrationPage() {
   });
   const [csvText, setCsvText] = useState("");
   const [portalError, setPortalError] = useState<string | null>(null);
+  const [detailStatus, setDetailStatus] = useState<{
+    active: boolean;
+    run: number;
+    remaining: number | null;
+    itemRows: number;
+    error: string | null;
+  }>({ active: false, run: 0, remaining: null, itemRows: 0, error: null });
   const status = useQuery({
     queryKey: ["integration-status"],
     queryFn: () => api<IntegrationStatus>("/api/integration/status")
@@ -90,36 +99,43 @@ export function IntegrationPage() {
         method: "POST",
         body: JSON.stringify({ date, includeWaste: false, includeStatistics: false })
       }),
+    onMutate: () => {
+      setDetailStatus({ active: false, run: 0, remaining: null, itemRows: 0, error: null });
+    },
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["integration-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
-        queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
-        queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
-        queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
-        queryClient.invalidateQueries({ queryKey: ["analysis-sales"] }),
-        queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
-        queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
-      ]);
-      void api<SyncResult>("/api/integration/dulce-hora/hydrate-date-details", {
-        method: "POST",
-        body: JSON.stringify({ date, limit: 3 })
+      await invalidateDulceHoraReporting(queryClient);
+      setDetailStatus({ active: true, run: 0, remaining: null, itemRows: 0, error: null });
+      void hydrateDulceHoraDetailsUntilDone({
+        date,
+        queryClient,
+        limit: 3,
+        maxRuns: 55,
+        onProgress: (progress) => {
+          setDetailStatus({
+            active: progress.remaining !== 0 && progress.run < progress.totalRuns,
+            run: progress.run,
+            remaining: progress.remaining,
+            itemRows: progress.itemRows,
+            error: null
+          });
+        }
       })
-        .then(() =>
-          Promise.all([
-            queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
-            queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
-            queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
-            queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
-            queryClient.invalidateQueries({ queryKey: ["analysis-sales"] }),
-            queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] })
-          ])
-        )
+        .then((result) => {
+          setDetailStatus({
+            active: false,
+            run: 0,
+            remaining: result.detailRecordsRemaining,
+            itemRows: result.itemRows,
+            error: null
+          });
+        })
         .catch((error) => {
           console.warn("[dulce-hora] No se pudo completar productos", error);
+          setDetailStatus((current) => ({
+            ...current,
+            active: false,
+            error: error instanceof Error ? error.message : "No se pudo completar productos"
+          }));
         });
     }
   });
@@ -128,10 +144,10 @@ export function IntegrationPage() {
       api<PortalSalesImportResult>("/api/imports/portal-sales", {
         method: "POST",
         body: JSON.stringify({ rows })
-      }),
+    }),
     onSuccess: async () => {
       setPortalError(null);
-      await invalidateReporting(queryClient);
+      await invalidateDulceHoraReporting(queryClient);
     }
   });
 
@@ -189,16 +205,23 @@ export function IntegrationPage() {
         <div className="sync-form">
           <label>
             Fecha
-            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+            <input
+              type="date"
+              value={date}
+              onChange={(event) => {
+                setDate(event.target.value);
+                setDetailStatus({ active: false, run: 0, remaining: null, itemRows: 0, error: null });
+              }}
+            />
           </label>
           <button
             className="primary-button"
-            disabled={sync.isPending || !status.data?.credentialsConfigured || !canRunSelectedDateSync}
+            disabled={sync.isPending || detailStatus.active || !status.data?.credentialsConfigured || !canRunSelectedDateSync}
             onClick={() => sync.mutate()}
             type="button"
           >
             <CalendarSync size={18} aria-hidden="true" />
-            {sync.isPending ? "Sincronizando..." : "Tomar ventas desde Dulce Hora"}
+            {sync.isPending ? "Sincronizando..." : detailStatus.active ? "Completando productos..." : "Tomar ventas desde Dulce Hora"}
           </button>
         </div>
 
@@ -233,6 +256,26 @@ export function IntegrationPage() {
             {sync.data.warnings.slice(-3).map((message) => (
               <span key={message}>{message}</span>
             ))}
+          </div>
+        ) : null}
+        {detailStatus.active || detailStatus.itemRows > 0 || detailStatus.error ? (
+          <div className={detailStatus.error ? "form-error" : "form-warning"}>
+            <strong>{detailStatus.active ? "Completando productos" : "Detalle de productos actualizado"}</strong>
+            {detailStatus.active ? (
+              <span>
+                Tanda {detailStatus.run}: {detailStatus.itemRows} items de producto cargados.
+              </span>
+            ) : (
+              <span>{detailStatus.itemRows} items de producto cargados.</span>
+            )}
+            {detailStatus.remaining !== null ? (
+              <span>
+                {detailStatus.remaining === 0
+                  ? "Productos completos para la fecha."
+                  : `Quedan ${detailStatus.remaining} comprobantes por completar.`}
+              </span>
+            ) : null}
+            {detailStatus.error ? <span>{detailStatus.error}</span> : null}
           </div>
         ) : null}
 
@@ -444,21 +487,6 @@ function label(key: string) {
     mutatingRoutesBlocked: "Rutas mutantes bloqueadas"
   };
   return labels[key] ?? key;
-}
-
-async function invalidateReporting(queryClient: QueryClient) {
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["integration-status"] }),
-    queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
-    queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
-    queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] }),
-    queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
-    queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
-    queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
-    queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
-    queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
-    queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
-  ]);
 }
 
 function parsePortalCsv(value: string): PortalSalesRow[] {

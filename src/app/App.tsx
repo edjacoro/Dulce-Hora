@@ -35,6 +35,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { WastePage } from "./pages/WastePage";
 import { canRunDulceHoraDateSyncFromThisHost } from "./runtime";
+import { hydrateDulceHoraDetailsUntilDone, invalidateDulceHoraReporting } from "./dulceHoraDetails";
 
 const navItems = [
   { to: "/", label: "Inicio", icon: Home },
@@ -120,22 +121,6 @@ export function App() {
     let cancelled = false;
     let running = false;
 
-    const invalidateAfterSync = async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dashboard-overview"] }),
-        queryClient.invalidateQueries({ queryKey: ["integration-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["finance-dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["cashflow-dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["sales-documents"] }),
-        queryClient.invalidateQueries({ queryKey: ["sales-summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["product-performance"] }),
-        queryClient.invalidateQueries({ queryKey: ["hour-performance"] }),
-        queryClient.invalidateQueries({ queryKey: ["analysis-sales"] }),
-        queryClient.invalidateQueries({ queryKey: ["waste-records"] }),
-        queryClient.invalidateQueries({ queryKey: ["waste-summary"] })
-      ]);
-    };
-
     const syncToday = async () => {
       if (running) return;
       running = true;
@@ -146,19 +131,17 @@ export function App() {
           body: JSON.stringify({ date: syncDate, includeWaste: false, includeStatistics: false })
         });
         if (!cancelled) {
-          await invalidateAfterSync();
+          await invalidateDulceHoraReporting(queryClient);
         }
-        void api("/api/integration/dulce-hora/hydrate-date-details", {
-          method: "POST",
-          body: JSON.stringify({ date: syncDate, limit: 3 })
-        })
-          .then(() => {
-            if (!cancelled) return invalidateAfterSync();
-            return undefined;
-          })
-          .catch((error) => {
-            console.warn("[dulce-hora] No se pudo completar productos automaticamente", error);
-          });
+        void hydrateDulceHoraDetailsUntilDone({
+          date: syncDate,
+          queryClient,
+          limit: 3,
+          maxRuns: 8,
+          shouldContinue: () => !cancelled
+        }).catch((error) => {
+          console.warn("[dulce-hora] No se pudo completar productos automaticamente", error);
+        });
       } catch (error) {
         console.warn("[dulce-hora] No se pudo sincronizar automaticamente el dia", error);
       } finally {
