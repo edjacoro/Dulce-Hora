@@ -62,13 +62,27 @@ export const handler: Handler = async () => {
       includeWaste: false,
       includeStatistics: false
     });
-    const detailResult = await hydrateDulceHoraDateDetails({
-      branchId: branch.id,
-      organizationId: organization.id,
-      userId: user.id,
-      date,
-      limit: Number(process.env.DULCE_HORA_SCHEDULED_DETAIL_LIMIT ?? 3)
-    });
+    const detailLimit = Number(process.env.DULCE_HORA_SCHEDULED_DETAIL_LIMIT ?? 3);
+    const detailBatches = Number(process.env.DULCE_HORA_SCHEDULED_DETAIL_BATCHES ?? 5);
+    let detailItemRows = 0;
+    let detailRecordsUpdated = 0;
+    let detailRecordsRemaining: number | null = null;
+    const detailWarnings: string[] = [];
+
+    for (let batch = 0; batch < detailBatches; batch += 1) {
+      const detailResult = await hydrateDulceHoraDateDetails({
+        branchId: branch.id,
+        organizationId: organization.id,
+        userId: user.id,
+        date,
+        limit: detailLimit
+      });
+      detailItemRows += detailResult.itemRows;
+      detailRecordsUpdated += detailResult.recordsUpdated;
+      detailRecordsRemaining = detailResult.detailRecordsRemaining ?? null;
+      detailWarnings.push(...(detailResult.warnings ?? []));
+      if (detailRecordsRemaining === 0 || (detailResult.recordsUpdated === 0 && detailResult.itemRows === 0)) break;
+    }
 
     return json(200, {
       ok: true,
@@ -76,9 +90,10 @@ export const handler: Handler = async () => {
       recordsReceived: result.recordsReceived,
       recordsCreated: result.recordsCreated,
       recordsUpdated: result.recordsUpdated,
-      itemRows: detailResult.itemRows,
-      detailRecordsUpdated: detailResult.recordsUpdated,
-      detailWarnings: detailResult.warnings
+      itemRows: detailItemRows,
+      detailRecordsUpdated,
+      detailRecordsRemaining,
+      detailWarnings
     });
   } catch (error) {
     console.error("[scheduled-sync-today]", error);

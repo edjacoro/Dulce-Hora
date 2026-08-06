@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ArrowRight,
@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type FinanceDailyRow, type FinanceDashboard, type FinanceMonthRow } from "../api";
-import { hydrateDulceHoraDetailsUntilDone, invalidateDulceHoraReporting } from "../dulceHoraDetails";
+import { useDulceHoraImportJob } from "../dulceHoraImportJob";
 import { canRunDulceHoraDateSyncFromThisHost } from "../runtime";
 
 type TabId =
@@ -22,24 +22,6 @@ type TabId =
   | "mermas"
   | "mensual"
   | "pnl";
-
-type SyncResult = {
-  date: string;
-  dateFrom?: string | null;
-  dateTo?: string | null;
-  datesSynced?: number;
-  recordsReceived: number;
-  recordsCreated: number;
-  recordsUpdated: number;
-  recordsRejected: number;
-  itemRows: number;
-  wasteRecordsReceived: number;
-  wasteRecordsCreated: number;
-  wasteRecordsUpdated: number;
-  errors: string[];
-  warnings?: string[];
-  detailRecordsRemaining?: number;
-};
 
 const tabs: Array<{ id: TabId; label: string }> = [
   { id: "hoy", label: "Hoy" },
@@ -51,7 +33,7 @@ const tabs: Array<{ id: TabId; label: string }> = [
 ];
 
 export function FinancePage() {
-  const queryClient = useQueryClient();
+  const importJob = useDulceHoraImportJob();
   const [activeTab, setActiveTab] = useState<TabId>("hoy");
   const [date, setDate] = useState(() => today());
   const canRunDulceHoraSync = canRunDulceHoraDateSyncFromThisHost(date);
@@ -65,24 +47,6 @@ export function FinancePage() {
     queryFn: () => api<FinanceDashboard>(`/api/finance/dashboard?month=${month}&date=${date}`)
   });
 
-  const sync = useMutation({
-    mutationFn: (targetDate: string) =>
-      api<SyncResult>("/api/integration/dulce-hora/sync-date", {
-        method: "POST",
-        body: JSON.stringify({ date: targetDate, includeWaste: false, includeStatistics: false })
-      }),
-    onSuccess: async (_result, targetDate) => {
-      await invalidateDulceHoraReporting(queryClient);
-      void hydrateDulceHoraDetailsUntilDone({
-        date: targetDate,
-        queryClient,
-        limit: 3,
-        maxRuns: 30
-      }).catch((error) => {
-        console.warn("[dulce-hora] No se pudo completar productos", error);
-      });
-    }
-  });
   const data = dashboard.data;
   const monthRow = useMemo(
     () => data?.monthlyRows.find((row) => row.month === data.month),
@@ -130,8 +94,10 @@ export function FinancePage() {
         <SyncPanel
           data={data}
           canSync={canRunDulceHoraSync}
-          pending={sync.isPending}
-          onSync={() => sync.mutate(date)}
+          pending={importJob.state.active}
+          onSync={() => {
+            void importJob.startImport({ date, maxRuns: 30 });
+          }}
         />
       </div>
 

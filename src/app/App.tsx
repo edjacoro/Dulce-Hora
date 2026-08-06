@@ -36,6 +36,7 @@ import { SetupPage } from "./pages/SetupPage";
 import { WastePage } from "./pages/WastePage";
 import { canRunDulceHoraDateSyncFromThisHost } from "./runtime";
 import { hydrateDulceHoraDetailsUntilDone, invalidateDulceHoraReporting } from "./dulceHoraDetails";
+import { DulceHoraImportJobBanner, DulceHoraImportJobProvider } from "./dulceHoraImportJob";
 
 const navItems = [
   { to: "/", label: "Inicio", icon: Home },
@@ -225,32 +226,38 @@ export function App() {
       </aside>
 
       <main className="main-panel">
-        <header className="topbar">
-          <img className="topbar-logo" src={dulceHoraLogo} alt="" />
-          <div>
-            <strong>{me.data.organization.name}</strong>
-            <small>
-              {me.data.branches[0]?.name ?? "Sin sucursal"} - {me.data.organization.currency}
-            </small>
-          </div>
-        </header>
+        <DulceHoraImportJobProvider>
+          <header className="topbar">
+            <img className="topbar-logo" src={dulceHoraLogo} alt="" />
+            <div>
+              <strong>{me.data.organization.name}</strong>
+              <small>
+                {me.data.branches[0]?.name ?? "Sin sucursal"} - {me.data.organization.currency}
+              </small>
+            </div>
+          </header>
 
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/ventas" element={<SalesPage />} />
-          <Route path="/productos" element={<ProductsPage />} />
-          <Route path="/horarios" element={<HoursPage />} />
-          <Route path="/grilla" element={<SchedulePage />} />
-          <Route path="/fichas" element={<EmployeeFilesPage />} />
-          <Route path="/gastos" element={<ExpensesPage />} />
-          <Route path="/mermas" element={<WastePage />} />
-          <Route path="/finanzas" element={<FinancePage />} />
-          <Route path="/cashflow" element={<CashflowPage />} />
-          <Route path="/analisis" element={<AnalysisPage />} />
-          <Route path="/importaciones" element={<IntegrationPage />} />
-          <Route path="/ajustes" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+          <div className="main-content">
+            <DulceHoraImportJobBanner />
+
+            <Routes>
+              <Route path="/" element={<DashboardPage />} />
+              <Route path="/ventas" element={<SalesPage />} />
+              <Route path="/productos" element={<ProductsPage />} />
+              <Route path="/horarios" element={<HoursPage />} />
+              <Route path="/grilla" element={<SchedulePage />} />
+              <Route path="/fichas" element={<EmployeeFilesPage />} />
+              <Route path="/gastos" element={<ExpensesPage />} />
+              <Route path="/mermas" element={<WastePage />} />
+              <Route path="/finanzas" element={<FinancePage />} />
+              <Route path="/cashflow" element={<CashflowPage />} />
+              <Route path="/analisis" element={<AnalysisPage />} />
+              <Route path="/importaciones" element={<IntegrationPage />} />
+              <Route path="/ajustes" element={<SettingsPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </div>
+        </DulceHoraImportJobProvider>
       </main>
     </div>
   );

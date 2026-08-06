@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarSync, CheckCircle2, FileSpreadsheet, LockKeyhole, Server, Upload } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api } from "../api";
-import { hydrateDulceHoraDetailsUntilDone, invalidateDulceHoraReporting } from "../dulceHoraDetails";
+import { invalidateDulceHoraReporting } from "../dulceHoraDetails";
+import { useDulceHoraImportJob } from "../dulceHoraImportJob";
 import { canRunDulceHoraDateSyncFromThisHost } from "../runtime";
 
 type IntegrationStatus = {
@@ -25,22 +26,6 @@ type SyncRun = {
   records_updated: number;
   error_message: string | null;
   branch_name: string;
-};
-
-type SyncResult = {
-  runId: string;
-  date: string;
-  recordsReceived: number;
-  recordsCreated: number;
-  recordsUpdated: number;
-  recordsRejected: number;
-  itemRows: number;
-  wasteRecordsReceived: number;
-  wasteRecordsCreated: number;
-  wasteRecordsUpdated: number;
-  errors: string[];
-  warnings?: string[];
-  detailRecordsRemaining?: number;
 };
 
 type PortalProvider = "pedidosya" | "rappi" | "otro";
@@ -67,9 +52,13 @@ type PortalSalesImportResult = {
 
 export function IntegrationPage() {
   const queryClient = useQueryClient();
+  const importJob = useDulceHoraImportJob();
   const [date, setDate] = useState(() => todayArgentina());
   const canRunSelectedDateSync = canRunDulceHoraDateSyncFromThisHost(date);
   const selectedDateIsToday = date === todayArgentina();
+  const selectedImport = importJob.state.date === date ? importJob.state : null;
+  const runningSelectedDate = Boolean(selectedImport?.active);
+  const runningAnotherDate = importJob.state.active && importJob.state.date !== date;
   const [portalForm, setPortalForm] = useState({
     provider: "pedidosya" as PortalProvider,
     paymentKind: "online" as PortalPaymentKind,
@@ -81,64 +70,11 @@ export function IntegrationPage() {
   });
   const [csvText, setCsvText] = useState("");
   const [portalError, setPortalError] = useState<string | null>(null);
-  const [detailStatus, setDetailStatus] = useState<{
-    active: boolean;
-    run: number;
-    remaining: number | null;
-    itemRows: number;
-    error: string | null;
-  }>({ active: false, run: 0, remaining: null, itemRows: 0, error: null });
   const status = useQuery({
     queryKey: ["integration-status"],
     queryFn: () => api<IntegrationStatus>("/api/integration/status")
   });
 
-  const sync = useMutation({
-    mutationFn: () =>
-      api<SyncResult>("/api/integration/dulce-hora/sync-date", {
-        method: "POST",
-        body: JSON.stringify({ date, includeWaste: false, includeStatistics: false })
-      }),
-    onMutate: () => {
-      setDetailStatus({ active: false, run: 0, remaining: null, itemRows: 0, error: null });
-    },
-    onSuccess: async () => {
-      await invalidateDulceHoraReporting(queryClient);
-      setDetailStatus({ active: true, run: 0, remaining: null, itemRows: 0, error: null });
-      void hydrateDulceHoraDetailsUntilDone({
-        date,
-        queryClient,
-        limit: 3,
-        maxRuns: 55,
-        onProgress: (progress) => {
-          setDetailStatus({
-            active: progress.remaining !== 0 && progress.run < progress.totalRuns,
-            run: progress.run,
-            remaining: progress.remaining,
-            itemRows: progress.itemRows,
-            error: null
-          });
-        }
-      })
-        .then((result) => {
-          setDetailStatus({
-            active: false,
-            run: 0,
-            remaining: result.detailRecordsRemaining,
-            itemRows: result.itemRows,
-            error: null
-          });
-        })
-        .catch((error) => {
-          console.warn("[dulce-hora] No se pudo completar productos", error);
-          setDetailStatus((current) => ({
-            ...current,
-            active: false,
-            error: error instanceof Error ? error.message : "No se pudo completar productos"
-          }));
-        });
-    }
-  });
   const portalImport = useMutation({
     mutationFn: (rows: PortalSalesRow[]) =>
       api<PortalSalesImportResult>("/api/imports/portal-sales", {
@@ -208,20 +144,25 @@ export function IntegrationPage() {
             <input
               type="date"
               value={date}
-              onChange={(event) => {
-                setDate(event.target.value);
-                setDetailStatus({ active: false, run: 0, remaining: null, itemRows: 0, error: null });
-              }}
+              onChange={(event) => setDate(event.target.value)}
             />
           </label>
           <button
             className="primary-button"
-            disabled={sync.isPending || detailStatus.active || !status.data?.credentialsConfigured || !canRunSelectedDateSync}
-            onClick={() => sync.mutate()}
+            disabled={importJob.state.active || !status.data?.credentialsConfigured || !canRunSelectedDateSync}
+            onClick={() => {
+              void importJob.startImport({ date, maxRuns: 55 });
+            }}
             type="button"
           >
             <CalendarSync size={18} aria-hidden="true" />
-            {sync.isPending ? "Sincronizando..." : detailStatus.active ? "Completando productos..." : "Tomar ventas desde Dulce Hora"}
+            {runningSelectedDate
+              ? selectedImport?.phase === "syncing"
+                ? "Sincronizando..."
+                : "Completando productos..."
+              : runningAnotherDate
+                ? "Importacion en curso..."
+                : "Tomar ventas desde Dulce Hora"}
           </button>
         </div>
 
@@ -235,47 +176,52 @@ export function IntegrationPage() {
           <p className="form-error">Esta fecha no esta habilitada para sincronizacion online.</p>
         ) : null}
 
-        {sync.error ? <p className="form-error">{sync.error.message}</p> : null}
-
-        {sync.data ? (
-          <div className="sync-result">
-            <strong>Sincronizacion terminada</strong>
-            <span>{sync.data.recordsReceived} comprobantes leidos</span>
-            <span>{sync.data.recordsCreated} nuevos</span>
-            <span>{sync.data.recordsUpdated} actualizados</span>
-            <span>{sync.data.recordsRejected} rechazados</span>
-            <span>{sync.data.itemRows} items</span>
-            <span>{sync.data.wasteRecordsReceived} mermas leidas</span>
-            <span>{sync.data.wasteRecordsCreated} mermas nuevas</span>
-            <span>{sync.data.wasteRecordsUpdated} mermas actualizadas</span>
+        {runningAnotherDate ? (
+          <div className="form-warning">
+            <strong>Importacion en segundo plano</strong>
+            <span>
+              Hay una importacion corriendo para {formatDate(importJob.state.date)}. Podes salir de esta pantalla y seguir usando la app.
+            </span>
           </div>
         ) : null}
-        {sync.data?.warnings?.length ? (
+
+        {selectedImport?.phase === "error" ? <p className="form-error">{selectedImport.error}</p> : null}
+
+        {selectedImport?.recordsReceived !== null && selectedImport?.recordsReceived !== undefined ? (
+          <div className="sync-result">
+            <strong>{selectedImport.active ? "Sincronizacion en curso" : "Sincronizacion terminada"}</strong>
+            <span>{selectedImport.recordsReceived} comprobantes leidos</span>
+            <span>{selectedImport.recordsCreated ?? 0} nuevos</span>
+            <span>{selectedImport.recordsUpdated ?? 0} actualizados</span>
+            <span>{selectedImport.recordsRejected ?? 0} rechazados</span>
+          </div>
+        ) : null}
+        {selectedImport?.warnings.length ? (
           <div className="form-warning">
             <strong>Advertencias</strong>
-            {sync.data.warnings.slice(-3).map((message) => (
+            {selectedImport.warnings.slice(-3).map((message) => (
               <span key={message}>{message}</span>
             ))}
           </div>
         ) : null}
-        {detailStatus.active || detailStatus.itemRows > 0 || detailStatus.error ? (
-          <div className={detailStatus.error ? "form-error" : "form-warning"}>
-            <strong>{detailStatus.active ? "Completando productos" : "Detalle de productos actualizado"}</strong>
-            {detailStatus.active ? (
+        {selectedImport && (selectedImport.phase === "details" || selectedImport.detailItemRows > 0 || selectedImport.error) ? (
+          <div className={selectedImport.error ? "form-error" : "form-warning"}>
+            <strong>{selectedImport.active ? "Completando productos" : "Detalle de productos actualizado"}</strong>
+            {selectedImport.active ? (
               <span>
-                Tanda {detailStatus.run}: {detailStatus.itemRows} items de producto cargados.
+                Tanda {selectedImport.detailRun}: {selectedImport.detailItemRows} items de producto cargados.
               </span>
             ) : (
-              <span>{detailStatus.itemRows} items de producto cargados.</span>
+              <span>{selectedImport.detailItemRows} items de producto cargados.</span>
             )}
-            {detailStatus.remaining !== null ? (
+            {selectedImport.detailRemaining !== null ? (
               <span>
-                {detailStatus.remaining === 0
+                {selectedImport.detailRemaining === 0
                   ? "Productos completos para la fecha."
-                  : `Quedan ${detailStatus.remaining} comprobantes por completar.`}
+                  : `Quedan ${selectedImport.detailRemaining} comprobantes por completar.`}
               </span>
             ) : null}
-            {detailStatus.error ? <span>{detailStatus.error}</span> : null}
+            {selectedImport.error ? <span>{selectedImport.error}</span> : null}
           </div>
         ) : null}
 
@@ -614,6 +560,14 @@ function formatCurrency(value: number) {
     currency: "ARS",
     maximumFractionDigits: 0
   }).format(value);
+}
+
+function formatDate(value: string | null) {
+  if (!value) {
+    return "otra fecha";
+  }
+  const [year, month, day] = value.split("-");
+  return `${day}/${month}/${year}`;
 }
 
 function todayArgentina() {
