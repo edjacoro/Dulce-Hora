@@ -22,10 +22,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
         const text = await response.text();
         if (text.trim()) {
           const cleanedText = cleanErrorText(text);
+          const timeoutMessage = timeoutErrorMessage(path);
           payload = {
             error:
               response.status === 504 || /Inactivity Timeout/i.test(text)
-                ? "Netlify corto la importacion por timeout leyendo Dulce Hora. Reintenta la fecha; si se repite, el portal externo esta tardando demasiado."
+                ? timeoutMessage
                 : `No se pudo completar la solicitud (${response.status}). ${cleanedText.slice(0, 240)}`
           };
         }
@@ -37,6 +38,16 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+function timeoutErrorMessage(path: string) {
+  if (path.includes("/api/imports/expenses-sheet")) {
+    return "Netlify corto la importacion por timeout leyendo la planilla de Google Drive. Reintenta la importacion; si se repite, la planilla esta tardando demasiado en descargarse o procesarse.";
+  }
+  if (path.includes("/api/integration/dulce-hora")) {
+    return "Netlify corto la importacion por timeout leyendo Dulce Hora. Reintenta la fecha; si se repite, el portal externo esta tardando demasiado.";
+  }
+  return "Netlify corto la solicitud por timeout. Reintenta la operacion; si se repite, el origen de datos esta tardando demasiado.";
 }
 
 function cleanErrorText(text: string) {
@@ -231,6 +242,10 @@ export type HourPerformance = {
     bestWeekdayByTickets: string | null;
     bestWeekdayByTicketsCount: number;
   };
+  topDatesByRevenue: HourDateTopRow[];
+  topDatesByTickets: HourDateTopRow[];
+  topDateHoursByRevenue: HourDateHourTopRow[];
+  topDateHoursByTickets: HourDateHourTopRow[];
   hours: Array<{
     hourKey: string;
     label: string;
@@ -275,6 +290,21 @@ export type HourPerformance = {
     revenue: number;
     tickets: number;
   }>;
+};
+
+export type HourDateTopRow = {
+  date: string;
+  weekday: number;
+  label: string;
+  shortLabel: string;
+  revenue: number;
+  documents: number;
+  tickets: number;
+};
+
+export type HourDateHourTopRow = HourDateTopRow & {
+  hourKey: string;
+  hourLabel: string;
 };
 
 export type AnalysisDashboard = {

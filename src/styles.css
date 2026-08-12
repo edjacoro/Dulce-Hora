@@ -149,7 +149,7 @@ a {
 .auth-logo {
   display: block;
   object-fit: contain;
-  background: #fff;
+  background: transparent;
 }
 
 .brand-logo {
@@ -164,19 +164,19 @@ a {
   width: 42px;
   height: 42px;
   margin-right: 12px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: 8px;
-  padding: 3px;
+  padding: 0;
 }
 
 .auth-logo {
   flex: 0 0 auto;
   width: 78px;
   height: 78px;
-  border: 1px solid #e8edf2;
+  border: 0;
   border-radius: 10px;
-  padding: 5px;
-  box-shadow: 0 8px 20px rgba(24, 25, 27, 0.1);
+  padding: 0;
+  box-shadow: none;
 }
 
 .auth-logo.compact-logo {
@@ -846,7 +846,10 @@ a {
 }
 
 .data-table-wrap {
+  max-width: 100%;
   overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #c4d1dc transparent;
 }
 
 .bar-list {
@@ -1157,6 +1160,38 @@ a {
 }
 
 .finance-table th {
+  background: #f4f7f9;
+}
+
+.finance-month-card {
+  padding: 12px;
+}
+
+.finance-month-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.finance-month-table {
+  min-width: 1180px;
+  font-size: 0.88rem;
+}
+
+.finance-month-table th,
+.finance-month-table td {
+  padding: 9px 9px;
+  white-space: nowrap;
+}
+
+.finance-month-table td:first-child,
+.finance-month-table th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.finance-month-table th:first-child {
   background: #f4f7f9;
 }
 
@@ -2146,8 +2181,8 @@ a {
   height: 112px;
   object-fit: contain;
   border-radius: 12px;
-  padding: 7px;
-  background: #fff;
+  padding: 0;
+  background: transparent;
 }
 
 .dashboard-logo-panel strong {
@@ -2305,6 +2340,32 @@ a {
   grid-template-columns: minmax(0, 1fr) minmax(130px, 160px);
   gap: 10px;
   align-items: stretch;
+}
+
+.ai-range-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.ai-range-controls label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ai-range-controls input {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 900;
 }
 
 .ai-question-form textarea {
@@ -2500,6 +2561,7 @@ a {
     .dashboard-status-band,
     .dashboard-status-grid,
     .ai-question-form,
+    .ai-range-controls,
     .ai-answer-grid,
     .sync-form,
     .split-layout,

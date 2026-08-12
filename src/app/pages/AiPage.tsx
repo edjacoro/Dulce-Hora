@@ -27,8 +27,8 @@ const suggestions = [
 export function AiPage() {
   const [question, setQuestion] = useState("");
   const [askedQuestion, setAskedQuestion] = useState(suggestions[0]);
-  const from = monthStart(today());
-  const to = today();
+  const [from, setFrom] = useState(() => monthStart(today()));
+  const [to, setTo] = useState(() => today());
 
   const products = useQuery({
     queryKey: ["product-performance", from, to, "ai"],
@@ -61,7 +61,16 @@ export function AiPage() {
           <h1>IA</h1>
           <p>Preguntas rapidas sobre ventas, productos, horarios y empleados con datos de Neon.</p>
         </div>
-        <span className="period-chip">{shortDate(from)} a {shortDate(to)}</span>
+        <div className="ai-range-controls">
+          <label>
+            Desde
+            <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+          </label>
+          <label>
+            Hasta
+            <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+          </label>
+        </div>
       </div>
 
       <section className="ai-panel">
@@ -102,7 +111,7 @@ export function AiPage() {
               }}
               type="button"
             >
-              {suggestion}
+              {suggestionLabel(suggestion, from, to)}
             </button>
           ))}
         </div>
@@ -134,6 +143,11 @@ export function AiPage() {
       ) : null}
     </section>
   );
+}
+
+function suggestionLabel(suggestion: string, from: string, to: string) {
+  if (from === monthStart(today()) && to === today()) return suggestion;
+  return suggestion.replace("del mes", "del rango").replace("este mes", "este rango");
 }
 
 function buildAnswer(

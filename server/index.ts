@@ -906,7 +906,7 @@ app.get("/api/hours/performance", requireAuth, async (req, res) => {
   addDateRangeFilter(filters, params, "sd.sale_date", range);
   const where = filters.join(" and ");
 
-  const [hourRows, weekdayRows, weekdayHourRows, totals] = await Promise.all([
+  const [hourRows, weekdayRows, weekdayHourRows, topDateRows, topDateHourRows, totals] = await Promise.all([
     db.query<{
       hour_key: string;
       revenue: string;
@@ -997,7 +997,64 @@ app.get("/api/hours/performance", requireAuth, async (req, res) => {
               coalesce(sum(ticket_count), 0)::text as tickets
        from documents
        group by weekday, hour_key
-       order by weekday, hour_key`,
+      order by weekday, hour_key`,
+      params
+    ),
+    db.query<{
+      date: string;
+      weekday: string;
+      revenue: string;
+      documents: string;
+      tickets: string;
+    }>(
+      `with documents as (
+         select sd.id,
+                sd.sale_date,
+                extract(dow from sd.sale_date)::int as weekday,
+                ${netTotal} as revenue,
+                case when sd.status = 'active' then 1 else 0 end as ticket_count
+         from sales_documents sd
+         join branches b on b.id = sd.branch_id
+         where ${where}
+       )
+       select sale_date::text as date,
+              weekday::text,
+              coalesce(sum(revenue), 0)::text as revenue,
+              count(id)::text as documents,
+              coalesce(sum(ticket_count), 0)::text as tickets
+       from documents
+       group by sale_date, weekday
+       order by sale_date`,
+      params
+    ),
+    db.query<{
+      date: string;
+      weekday: string;
+      hour_key: string;
+      revenue: string;
+      documents: string;
+      tickets: string;
+    }>(
+      `with documents as (
+         select sd.id,
+                sd.sale_date,
+                extract(dow from sd.sale_date)::int as weekday,
+                coalesce(substring(sd.sale_time::text from 1 for 2), 'Sin hora') as hour_key,
+                ${netTotal} as revenue,
+                case when sd.status = 'active' then 1 else 0 end as ticket_count
+         from sales_documents sd
+         join branches b on b.id = sd.branch_id
+         where ${where}
+       )
+       select sale_date::text as date,
+              weekday::text,
+              hour_key,
+              coalesce(sum(revenue), 0)::text as revenue,
+              count(id)::text as documents,
+              coalesce(sum(ticket_count), 0)::text as tickets
+       from documents
+       group by sale_date, weekday, hour_key
+       order by sale_date, hour_key`,
       params
     ),
     queryOne<{
@@ -1140,6 +1197,26 @@ app.get("/api/hours/performance", requireAuth, async (req, res) => {
     revenue: toNumber(row.revenue),
     tickets: toNumber(row.tickets)
   }));
+  const topDateRowsMapped = topDateRows.rows.map((row) => ({
+    date: row.date,
+    weekday: toNumber(row.weekday),
+    label: dateWithWeekdayLabel(row.date),
+    shortLabel: dateShortLabel(row.date),
+    revenue: toNumber(row.revenue),
+    documents: toNumber(row.documents),
+    tickets: toNumber(row.tickets)
+  }));
+  const topDateHourRowsMapped = topDateHourRows.rows.map((row) => ({
+    date: row.date,
+    weekday: toNumber(row.weekday),
+    label: dateWithWeekdayLabel(row.date),
+    shortLabel: dateShortLabel(row.date),
+    hourKey: row.hour_key,
+    hourLabel: hourLabel(row.hour_key),
+    revenue: toNumber(row.revenue),
+    documents: toNumber(row.documents),
+    tickets: toNumber(row.tickets)
+  }));
 
   res.json({
     range,
@@ -1161,6 +1238,14 @@ app.get("/api/hours/performance", requireAuth, async (req, res) => {
       bestWeekdayByTickets: bestWeekdayByTickets?.label ?? null,
       bestWeekdayByTicketsCount: bestWeekdayByTickets?.ticketsPerDay ?? 0
     },
+    topDatesByRevenue: [...topDateRowsMapped].sort((a, b) => b.revenue - a.revenue || b.tickets - a.tickets).slice(0, 3),
+    topDatesByTickets: [...topDateRowsMapped].sort((a, b) => b.tickets - a.tickets || b.revenue - a.revenue).slice(0, 3),
+    topDateHoursByRevenue: [...topDateHourRowsMapped]
+      .sort((a, b) => b.revenue - a.revenue || b.tickets - a.tickets)
+      .slice(0, 3),
+    topDateHoursByTickets: [...topDateHourRowsMapped]
+      .sort((a, b) => b.tickets - a.tickets || b.revenue - a.revenue)
+      .slice(0, 3),
     hours,
     weekdays,
     weekdayHours
@@ -2000,6 +2085,29 @@ function weekdaySignal(input: {
 
 function hourLabel(value: string) {
   return value === "Sin hora" ? value : `${value}:00`;
+}
+
+function dateWithWeekdayLabel(value: string) {
+  const date = parseDateInput(value);
+  return new Intl.DateTimeFormat("es-AR", {
+    weekday: "long",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  }).format(date);
+}
+
+function dateShortLabel(value: string) {
+  const date = parseDateInput(value);
+  return new Intl.DateTimeFormat("es-AR", {
+    day: "2-digit",
+    month: "2-digit"
+  }).format(date);
+}
+
+function parseDateInput(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 function weekdayLabel(value: number) {

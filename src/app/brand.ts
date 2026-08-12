@@ -1,1 +1,1 @@
-export const dulceHoraLogo = "/logo-dh-urquiza.png";
+export const dulceHoraLogo = "/logo-dh-transparente.png";

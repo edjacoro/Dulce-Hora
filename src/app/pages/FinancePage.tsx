@@ -391,11 +391,12 @@ function PnlView({ data }: { data: FinanceDashboard }) {
 
 function MonthlyTable({ rows }: { rows: FinanceMonthRow[] }) {
   const maxSales = Math.max(1, ...rows.map((row) => row.sales));
-  const maxCosts = Math.max(1, ...rows.map((row) => row.costs));
+  const maxExpenses = Math.max(1, ...rows.map((row) => row.expenses));
+  const maxWaste = Math.max(1, ...rows.map((row) => row.waste));
   return (
-    <section className="content-band">
-      <div className="data-table-wrap">
-        <table className="data-table finance-table">
+    <section className="content-band finance-month-card">
+      <div className="data-table-wrap finance-month-table-wrap">
+        <table className="data-table finance-table finance-month-table">
           <thead>
             <tr>
               <th>Mes</th>
@@ -404,7 +405,9 @@ function MonthlyTable({ rows }: { rows: FinanceMonthRow[] }) {
               <th>Ticket prom.</th>
               <th>Venta/dia</th>
               <th>Tickets/dia</th>
-              <th>Gastos + mermas</th>
+              <th>Gastos</th>
+              <th>Mermas $</th>
+              <th>Merma %</th>
               <th>Resultado</th>
               <th>Margen %</th>
             </tr>
@@ -425,8 +428,15 @@ function MonthlyTable({ rows }: { rows: FinanceMonthRow[] }) {
                 <td>{formatCurrency(row.salesPerDay)}</td>
                 <td>{formatNumber(row.ticketsPerDay)}</td>
                 <td>
-                  {formatCurrency(row.costs)}
-                  <Meter value={row.costs} max={maxCosts} tone="cost" />
+                  {formatCurrency(row.expenses)}
+                  <Meter value={row.expenses} max={maxExpenses} tone="cost" />
+                </td>
+                <td>
+                  {row.waste === 0 ? "-" : formatCurrency(row.waste)}
+                  {row.waste > 0 ? <Meter value={row.waste} max={maxWaste} tone="cost" /> : null}
+                </td>
+                <td>
+                  {row.sales > 0 && row.waste > 0 ? <WastePercentBadge value={(row.waste / row.sales) * 100} /> : "-"}
                 </td>
                 <td className={row.result >= 0 ? "positive-text" : "negative-text"}>
                   {signedCurrency(row.result)}

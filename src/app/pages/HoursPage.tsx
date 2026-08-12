@@ -139,25 +139,29 @@ export function HoursPage() {
             <Kpi
               icon={TrendingUp}
               label="Hora fuerte $"
-              value={data.summary.bestHourByRevenue ?? "-"}
+              value={data.topDateHoursByRevenue[0]?.hourLabel ?? data.summary.bestHourByRevenue ?? "-"}
+              note={data.topDateHoursByRevenue[0]?.label}
               tone="green"
             />
             <Kpi
               icon={Clock3}
               label="Hora fuerte tickets"
-              value={data.summary.bestHourByTickets ?? "-"}
+              value={data.topDateHoursByTickets[0]?.hourLabel ?? data.summary.bestHourByTickets ?? "-"}
+              note={data.topDateHoursByTickets[0]?.label}
               tone="green"
             />
             <Kpi
               icon={CalendarDays}
               label="Dia fuerte $"
-              value={data.summary.bestWeekdayByRevenue ?? "-"}
+              value={data.topDatesByRevenue[0]?.label ?? data.summary.bestWeekdayByRevenue ?? "-"}
+              note={data.topDatesByRevenue[0] ? formatCurrency(data.topDatesByRevenue[0].revenue) : undefined}
               tone="green"
             />
             <Kpi
               icon={CalendarDays}
               label="Dia fuerte tickets"
-              value={data.summary.bestWeekdayByTickets ?? "-"}
+              value={data.topDatesByTickets[0]?.label ?? data.summary.bestWeekdayByTickets ?? "-"}
+              note={data.topDatesByTickets[0] ? `${formatInteger(data.topDatesByTickets[0].tickets)} tickets` : undefined}
               tone="green"
             />
           </div>
@@ -191,6 +195,39 @@ export function HoursPage() {
                 label: hour.label,
                 value: formatCurrency(hour.revenue),
                 detail: `${formatInteger(hour.tickets)} tickets - ${formatPercent(hour.share)} de venta`
+              }))}
+            />
+          </div>
+
+          <div className="product-insight-grid">
+            <InsightPanel
+              icon={TrendingUp}
+              title="Top 3 hora y venta"
+              empty="Sin ventas con hora en este periodo."
+              rows={data.topDateHoursByRevenue.map((row) => ({
+                label: `${row.hourLabel} - ${row.label}`,
+                value: formatCurrency(row.revenue),
+                detail: `${formatInteger(row.tickets)} tickets`
+              }))}
+            />
+            <InsightPanel
+              icon={Clock3}
+              title="Top 3 hora y tickets"
+              empty="Sin tickets con hora en este periodo."
+              rows={data.topDateHoursByTickets.map((row) => ({
+                label: `${row.hourLabel} - ${row.label}`,
+                value: formatInteger(row.tickets),
+                detail: formatCurrency(row.revenue)
+              }))}
+            />
+            <InsightPanel
+              icon={CalendarDays}
+              title="Top 3 dias"
+              empty="Sin dias con venta en este periodo."
+              rows={data.topDatesByRevenue.map((row) => ({
+                label: row.label,
+                value: formatCurrency(row.revenue),
+                detail: `${formatInteger(row.tickets)} tickets`
               }))}
             />
           </div>
@@ -657,18 +694,21 @@ function Kpi({
   icon: Icon,
   label,
   value,
-  tone = "blue"
+  tone = "blue",
+  note
 }: {
   icon: React.ElementType;
   label: string;
   value: string | number;
   tone?: "red" | "blue" | "green" | "amber" | "slate";
+  note?: string;
 }) {
   return (
     <article className={`kpi-card ${tone}`}>
       <Icon size={20} aria-hidden="true" />
       <span>{label}</span>
       <strong>{value}</strong>
+      {note ? <small>{note}</small> : null}
     </article>
   );
 }
