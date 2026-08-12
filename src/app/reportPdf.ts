@@ -137,7 +137,7 @@ export async function downloadProductsPdf(data: ProductPerformance, periodLabel:
   report.metrics([
     { label: "Venta productos", value: formatCurrency(data.summary.revenue), tone: "blue" },
     { label: "Unidades", value: formatNumber(data.summary.quantitySold), tone: "green" },
-    { label: "Tickets", value: formatInteger(data.summary.tickets), tone: "slate" },
+    { label: "Articulos/ticket", value: formatNumber(data.summary.itemsPerTicket), tone: "slate" },
     { label: "Merma asociada", value: formatCurrency(data.summary.wasteCost), tone: "red" },
     { label: "Merma/venta", value: formatPercent(data.summary.wasteRate), tone: data.summary.wasteRate >= 3 ? "red" : "green" }
   ]);

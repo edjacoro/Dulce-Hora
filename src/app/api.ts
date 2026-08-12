@@ -178,7 +178,9 @@ export type ProductPerformance = {
   summary: {
     revenue: number;
     quantitySold: number;
+    itemLines: number;
     tickets: number;
+    itemsPerTicket: number;
     soldProducts: number;
     totalProducts: number;
     wasteCost: number;

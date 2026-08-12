@@ -764,11 +764,13 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
     queryOne<{
       revenue: string;
       quantity_sold: string;
+      item_lines: string;
       tickets: string;
       products: string;
     }>(
       `select coalesce(sum(si.line_total), 0)::text as revenue,
               coalesce(sum(si.quantity), 0)::text as quantity_sold,
+              count(si.id)::text as item_lines,
               count(distinct sd.id)::text as tickets,
               count(distinct ${productKey})::text as products
        from sale_items si
@@ -881,7 +883,10 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
     summary: {
       revenue: totalRevenue,
       quantitySold: toNumber(salesTotals?.quantity_sold),
+      itemLines: toNumber(salesTotals?.item_lines),
       tickets: toNumber(salesTotals?.tickets),
+      itemsPerTicket:
+        toNumber(salesTotals?.tickets) > 0 ? toNumber(salesTotals?.item_lines) / toNumber(salesTotals?.tickets) : 0,
       soldProducts: toNumber(salesTotals?.products),
       totalProducts: products.length,
       wasteCost,

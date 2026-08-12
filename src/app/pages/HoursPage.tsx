@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type HourPerformance } from "../api";
+import { SalesSectionTabs } from "../components/SalesSectionTabs";
+import { useProductDetailHydration } from "../useProductDetailHydration";
 
 type PeriodMode = "day" | "month" | "range";
 type SortDirection = "asc" | "desc";
@@ -66,6 +68,10 @@ export function HoursPage() {
     queryKey: ["hour-performance", period.from, period.to],
     queryFn: () => api<HourPerformance>(`/api/hours/performance${query}`)
   });
+  const detailHydration = useProductDetailHydration({
+    date: selectedDate,
+    enabled: mode === "day"
+  });
 
   const data = performance.data;
   const hours = useMemo(() => data?.hours ?? [], [data?.hours]);
@@ -105,6 +111,16 @@ export function HoursPage() {
           onTo={setTo}
         />
       </div>
+
+      <SalesSectionTabs />
+
+      {mode === "day" && detailHydration.running ? (
+        <div className="auto-detail-banner">
+          Completando productos en segundo plano
+          <strong>{Math.round(detailHydration.coverage * 100)}%</strong>
+          {detailHydration.remaining != null ? <span>{detailHydration.remaining} tickets pendientes</span> : null}
+        </div>
+      ) : null}
 
       {performance.isLoading ? (
         <section className="content-band">

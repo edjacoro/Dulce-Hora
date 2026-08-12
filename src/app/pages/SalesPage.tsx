@@ -14,7 +14,9 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api, type SalesDocument, type SalesSummary } from "../api";
+import { SalesSectionTabs } from "../components/SalesSectionTabs";
 import { downloadSalesPdf } from "../reportPdf";
+import { useProductDetailHydration } from "../useProductDetailHydration";
 
 type SalesResponse = {
   documents: SalesDocument[];
@@ -82,8 +84,14 @@ export function SalesPage() {
   const isDayMode = mode === "day";
   const activePeriodLabel = isDayMode ? formatFullDate(selectedDate) : `${from} al ${to}`;
   const itemDetailCoverage = stats?.itemDetailCoverage ?? 1;
+  const detailHydration = useProductDetailHydration({
+    date: selectedDate,
+    enabled: isDayMode && Boolean(stats?.tickets),
+    coverage: itemDetailCoverage
+  });
   const itemDetailNote =
-    itemDetailCoverage < 0.99 ? `Detalle productos ${Math.round(itemDetailCoverage * 100)}%` : undefined;
+    detailHydration.coverage < 0.99 ? `Detalle productos ${Math.round(detailHydration.coverage * 100)}%` : undefined;
+  const ticketsPerHour = isDayMode ? ticketsPerOperatingHour(selectedDate, stats?.tickets ?? 0) : null;
 
   return (
     <section className="page-section">
@@ -117,6 +125,16 @@ export function SalesPage() {
         </div>
       </div>
 
+      <SalesSectionTabs />
+
+      {isDayMode && detailHydration.running ? (
+        <div className="auto-detail-banner">
+          Completando productos en segundo plano
+          <strong>{Math.round(detailHydration.coverage * 100)}%</strong>
+          {detailHydration.remaining != null ? <span>{detailHydration.remaining} tickets pendientes</span> : null}
+        </div>
+      ) : null}
+
       <div className="kpi-grid">
         <Kpi
           icon={BadgeDollarSign}
@@ -132,11 +150,11 @@ export function SalesPage() {
           tone="green"
         />
         <Kpi
-          icon={ShoppingBag}
-          label="Articulos por ticket"
-          value={formatNumber(stats?.unitsPerTicket ?? 0)}
+          icon={Clock3}
+          label={isDayMode ? "Tickets por hora" : "Tickets prom. por dia"}
+          value={formatNumber(ticketsPerHour ?? averageTicketsPerDay(effectiveFrom, effectiveTo, stats?.tickets ?? 0))}
           tone="amber"
-          note={itemDetailNote}
+          note={isDayMode ? "segun horario de atencion" : undefined}
         />
         <Kpi
           icon={Coffee}
@@ -543,6 +561,55 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat("es-AR", {
     maximumFractionDigits: 2
   }).format(value);
+}
+
+function ticketsPerOperatingHour(value: string, tickets: number) {
+  const elapsed = operatingHoursElapsed(value);
+  return elapsed > 0 ? tickets / elapsed : 0;
+}
+
+function averageTicketsPerDay(from: string, to: string, tickets: number) {
+  const days = Math.max(1, daysBetween(from, to));
+  return tickets / days;
+}
+
+function operatingHoursElapsed(value: string) {
+  const { open, close } = businessHoursForDate(value);
+  const todayValue = today();
+  if (value > todayValue) return 0;
+  if (value < todayValue) return Math.max(0, (close - open) / 60);
+
+  const now = currentArgentinaMinutes();
+  const current = Math.min(close, Math.max(open, now));
+  return Math.max(0, (current - open) / 60);
+}
+
+function businessHoursForDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  const weekday = date.getDay();
+  if (weekday === 0) return { open: 8 * 60, close: 19 * 60 };
+  return { open: 7 * 60 + 30, close: 19 * 60 + 30 };
+}
+
+function currentArgentinaMinutes() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  return (hour % 24) * 60 + minute;
+}
+
+function daysBetween(from: string, to: string) {
+  const [fromYear, fromMonth, fromDay] = from.split("-").map(Number);
+  const [toYear, toMonth, toDay] = to.split("-").map(Number);
+  const start = Date.UTC(fromYear, fromMonth - 1, fromDay);
+  const end = Date.UTC(toYear, toMonth - 1, toDay);
+  return Math.floor((end - start) / 86_400_000) + 1;
 }
 
 function formatPaymentMethod(value: string | null) {

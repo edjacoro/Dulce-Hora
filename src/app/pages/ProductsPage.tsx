@@ -14,7 +14,9 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type ProductPerformance } from "../api";
+import { SalesSectionTabs } from "../components/SalesSectionTabs";
 import { downloadProductsPdf } from "../reportPdf";
+import { useProductDetailHydration } from "../useProductDetailHydration";
 
 type PeriodMode = "day" | "month" | "range";
 type SortDirection = "asc" | "desc";
@@ -49,6 +51,10 @@ export function ProductsPage() {
   const performance = useQuery({
     queryKey: ["product-performance", period.from, period.to],
     queryFn: () => api<ProductPerformance>(`/api/products/performance${query}&limit=200`)
+  });
+  const detailHydration = useProductDetailHydration({
+    date: selectedDate,
+    enabled: mode === "day"
   });
 
   const data = performance.data;
@@ -101,6 +107,16 @@ export function ProductsPage() {
         </div>
       </div>
 
+      <SalesSectionTabs />
+
+      {mode === "day" && detailHydration.running ? (
+        <div className="auto-detail-banner">
+          Completando productos en segundo plano
+          <strong>{Math.round(detailHydration.coverage * 100)}%</strong>
+          {detailHydration.remaining != null ? <span>{detailHydration.remaining} tickets pendientes</span> : null}
+        </div>
+      ) : null}
+
       {performance.isLoading ? (
         <section className="content-band">
           <p className="muted-text">Cargando productos...</p>
@@ -119,7 +135,12 @@ export function ProductsPage() {
             />
             <Kpi icon={ShoppingBag} label="Unidades vendidas" value={formatNumber(data.summary.quantitySold)} />
             <Kpi icon={PackageSearch} label="Productos vendidos" value={data.summary.soldProducts} tone="green" />
-            <Kpi icon={ReceiptText} label="Tickets con productos" value={formatInteger(data.summary.tickets)} />
+            <Kpi
+              icon={ReceiptText}
+              label="Articulos por ticket"
+              value={formatNumber(data.summary.itemsPerTicket)}
+              note={`${formatInteger(data.summary.tickets)} tickets con detalle`}
+            />
             <Kpi icon={Trash2} label="Merma asociada" value={formatCurrency(data.summary.wasteCost)} tone="red" />
             <Kpi
               icon={TrendingUp}
@@ -409,18 +430,21 @@ function Kpi({
   icon: Icon,
   label,
   value,
-  tone = "blue"
+  tone = "blue",
+  note
 }: {
   icon: React.ElementType;
   label: string;
   value: string | number;
   tone?: "red" | "blue" | "green" | "amber" | "slate";
+  note?: string;
 }) {
   return (
     <article className={`kpi-card ${tone}`}>
       <Icon size={20} aria-hidden="true" />
       <span>{label}</span>
       <strong>{value}</strong>
+      {note ? <small>{note}</small> : null}
     </article>
   );
 }

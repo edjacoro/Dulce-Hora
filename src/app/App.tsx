@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BadgeDollarSign,
   BarChart3,
+  BrainCircuit,
   CalendarDays,
   ClipboardList,
   FileSpreadsheet,
@@ -9,16 +10,16 @@ import {
   Landmark,
   LineChart,
   LogOut,
-  PackageSearch,
   IdCard,
   Settings,
   ShieldCheck,
   Trash2
 } from "lucide-react";
 import { useEffect } from "react";
-import { Navigate, NavLink, Route, Routes } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api, type DashboardOverview, type MeResponse, type ScheduleResponse, type SetupStatus } from "./api";
 import { dulceHoraLogo } from "./brand";
+import { AiPage } from "./pages/AiPage";
 import { AnalysisPage } from "./pages/AnalysisPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { CashflowPage } from "./pages/CashflowPage";
@@ -41,8 +42,6 @@ import { DulceHoraImportJobBanner, DulceHoraImportJobProvider } from "./dulceHor
 const navItems = [
   { to: "/", label: "Inicio", icon: Home },
   { to: "/ventas", label: "Ventas", icon: BadgeDollarSign },
-  { to: "/productos", label: "Productos", icon: PackageSearch },
-  { to: "/horarios", label: "Horarios", icon: BarChart3 },
   { to: "/grilla", label: "Grilla", icon: CalendarDays },
   { to: "/fichas", label: "Fichas", icon: IdCard },
   { to: "/gastos", label: "Gastos", icon: ClipboardList },
@@ -50,6 +49,7 @@ const navItems = [
   { to: "/finanzas", label: "Finanzas", icon: LineChart },
   { to: "/cashflow", label: "Cashflow", icon: Landmark },
   { to: "/analisis", label: "Analisis", icon: BarChart3 },
+  { to: "/ia", label: "IA", icon: BrainCircuit },
   { to: "/importaciones", label: "Importaciones", icon: FileSpreadsheet },
   { to: "/ajustes", label: "Ajustes", icon: Settings }
 ];
@@ -58,6 +58,7 @@ const EXPENSES_IMPORT_SESSION_KEY = "dulce-hora-auto-expenses-import-started-v2"
 
 export function App() {
   const queryClient = useQueryClient();
+  const location = useLocation();
   const canRunDulceHoraTodaySync = canRunDulceHoraDateSyncFromThisHost(todayArgentina());
   const setup = useQuery({
     queryKey: ["setup-status"],
@@ -198,7 +199,9 @@ export function App() {
               key={item.to}
               to={item.to}
               end={item.to === "/"}
-              className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
+              className={({ isActive }) =>
+                `nav-item ${isActive || isSalesSectionActive(item.to, location.pathname) ? "active" : ""}`
+              }
             >
               <item.icon size={18} aria-hidden="true" />
               <span>{item.label}</span>
@@ -232,7 +235,7 @@ export function App() {
             <div>
               <strong>{me.data.organization.name}</strong>
               <small>
-                {me.data.branches[0]?.name ?? "Sin sucursal"} - {me.data.organization.currency}
+                {branchDisplayName(me.data.branches[0]?.name)} - {me.data.organization.currency}
               </small>
             </div>
           </header>
@@ -252,6 +255,7 @@ export function App() {
               <Route path="/finanzas" element={<FinancePage />} />
               <Route path="/cashflow" element={<CashflowPage />} />
               <Route path="/analisis" element={<AnalysisPage />} />
+              <Route path="/ia" element={<AiPage />} />
               <Route path="/importaciones" element={<IntegrationPage />} />
               <Route path="/ajustes" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
@@ -261,6 +265,15 @@ export function App() {
       </main>
     </div>
   );
+}
+
+function isSalesSectionActive(itemPath: string, currentPath: string) {
+  return itemPath === "/ventas" && ["/ventas", "/productos", "/horarios"].some((path) => currentPath.startsWith(path));
+}
+
+function branchDisplayName(name: string | undefined) {
+  if (!name) return "JURAMENTO - Villa Urquiza";
+  return name.toLowerCase().includes("juramento") ? name : `JURAMENTO - ${name}`;
 }
 
 function Splash({ text }: { text: string }) {
