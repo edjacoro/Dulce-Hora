@@ -89,8 +89,10 @@ const emptyWithdrawalForm = (): WithdrawalForm => ({
 
 type ExpenseImportResult = {
   rowsReceived: number;
+  rowsScanned?: number;
   rowsCreated: number;
   rowsUpdated: number;
+  message?: string;
   byAccountingMonth?: Array<{
     month: string;
     records: number;
@@ -128,7 +130,7 @@ export function ExpensesPage() {
     mutationFn: () =>
       api<ExpenseImportResult>("/api/imports/expenses-sheet", {
         method: "POST",
-        body: JSON.stringify({})
+        body: JSON.stringify({ month })
       }),
     onSuccess: async () => refreshExpenses(queryClient)
   });
@@ -253,8 +255,10 @@ export function ExpensesPage() {
       {importSheet.data ? (
         <div className="sync-result">
           <strong>{importSheet.data.rowsReceived} filas leidas</strong>
+          {importSheet.data.rowsScanned !== undefined ? <span>{importSheet.data.rowsScanned} filas escaneadas</span> : null}
           <span>{importSheet.data.rowsCreated} nuevas</span>
           <span>{importSheet.data.rowsUpdated} actualizadas</span>
+          {importSheet.data.message ? <span>{importSheet.data.message}</span> : null}
           {(importSheet.data.byAccountingMonth ?? []).map((row) => (
             <span key={row.month}>
               {monthName(row.month)}: {row.records} filas - {formatCurrency(row.total)}

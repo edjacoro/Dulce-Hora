@@ -35,6 +35,9 @@ const cashAccountSchema = z.enum(["cash", "pedidosya", "rappi", "mercado_pago", 
 
 const DEFAULT_EXPENSES_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/1mYOoGvqmee5CT1XF6xllwK-4FFp74iFU/export?format=xlsx";
+const DEFAULT_EXPENSES_SHEET_GID = "32418470";
+const EXPENSES_CSV_TIMEOUT_MS = 15_000;
+const EXPENSES_XLSX_TIMEOUT_MS = 22_000;
 
 const expenseInputSchema = z.object({
   expenseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -102,7 +105,13 @@ const withdrawalInputSchema = z.object({
 });
 
 const expenseImportSchema = z.object({
-  url: z.string().url().optional().default(DEFAULT_EXPENSES_SHEET_URL)
+  url: z.string().url().optional().default(DEFAULT_EXPENSES_SHEET_URL),
+  gid: z.string().regex(/^\d+$/).optional().default(DEFAULT_EXPENSES_SHEET_GID),
+  month: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/)
+    .optional()
+    .nullable()
 });
 
 export function registerExpenseRoutes(app: Express) {
@@ -535,11 +544,26 @@ export function registerExpenseRoutes(app: Express) {
       return;
     }
 
-    const workbook = await downloadWorkbook(input.url);
-    const parsed = parseExpenseRows(workbook);
+    const loaded = await downloadExpenseSheet(input.url, input.gid);
+    const parsedAll = loaded.rows;
+    const parsed = filterParsedExpensesByMonth(parsedAll, input.month);
+
+    if (parsedAll.length === 0) {
+      res.status(400).json({ error: "No encontre filas validas en CONTROL DE GASTOS" });
+      return;
+    }
 
     if (parsed.length === 0) {
-      res.status(400).json({ error: "No encontre filas validas en CONTROL DE GASTOS" });
+      res.status(201).json({
+        rowsReceived: 0,
+        rowsScanned: parsedAll.length,
+        rowsCreated: 0,
+        rowsUpdated: 0,
+        byAccountingMonth: [],
+        categories: [],
+        source: loaded.source,
+        message: input.month ? `No encontre gastos para ${input.month}` : "No encontre gastos para importar"
+      });
       return;
     }
 
@@ -631,7 +655,7 @@ export function registerExpenseRoutes(app: Express) {
         [
           randomUUID(),
           branch.id,
-          workbook.Workbook?.Names?.[0]?.Name ?? "Planilla Dulce Hora",
+          loaded.source,
           parsed.map((row) => row.expenseDate).sort()[0],
           parsed.map((row) => row.expenseDate).sort().at(-1),
           parsed.length,
@@ -643,6 +667,7 @@ export function registerExpenseRoutes(app: Express) {
 
     res.status(201).json({
       rowsReceived: parsed.length,
+      rowsScanned: parsedAll.length,
       rowsCreated: created,
       rowsUpdated: updated,
       byAccountingMonth: summarizeParsedExpenses(parsed),
@@ -847,8 +872,42 @@ async function ensureExpenseCategory(queryable: Queryable, organizationId: strin
   return id;
 }
 
+async function downloadExpenseSheet(url: string, gid: string) {
+  try {
+    const csvWorkbook = await downloadCsvWorkbook(url, gid);
+    const rows = parseExpenseRows(csvWorkbook);
+    if (rows.length > 0) {
+      return {
+        rows,
+        source: "Planilla Dulce Hora - gastos CSV"
+      };
+    }
+  } catch {
+    // The CSV export is the fast path for Netlify. If Google changes the response,
+    // keep the Excel import as a compatibility fallback.
+  }
+
+  const workbook = await downloadWorkbook(url);
+  return {
+    rows: parseExpenseRows(workbook),
+    source: workbook.Workbook?.Names?.[0]?.Name ?? "Planilla Dulce Hora"
+  };
+}
+
+async function downloadCsvWorkbook(url: string, gid: string) {
+  const response = await fetchWithTimeout(spreadsheetCsvDownloadUrl(url, gid), EXPENSES_CSV_TIMEOUT_MS);
+  if (!response.ok) {
+    throw new Error(`No se pudo descargar la hoja de gastos (${response.status})`);
+  }
+  const text = await response.text();
+  if (/<html[\s>]/i.test(text.slice(0, 500))) {
+    throw new Error("Google Drive devolvio una pagina HTML en vez de la hoja de gastos");
+  }
+  return XLSX.read(text, { type: "string", cellDates: true });
+}
+
 async function downloadWorkbook(url: string) {
-  const response = await fetch(spreadsheetDownloadUrl(url));
+  const response = await fetchWithTimeout(spreadsheetDownloadUrl(url), EXPENSES_XLSX_TIMEOUT_MS);
   if (!response.ok) {
     throw new Error(`No se pudo descargar la planilla (${response.status})`);
   }
@@ -856,10 +915,31 @@ async function downloadWorkbook(url: string) {
   return XLSX.read(buffer, { type: "buffer", cellDates: true });
 }
 
+async function fetchWithTimeout(url: string, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function spreadsheetDownloadUrl(url: string) {
   const match = url.match(/\/d\/([^/?#]+)/);
   if (match?.[1]) return `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=xlsx`;
   return url;
+}
+
+function spreadsheetCsvDownloadUrl(url: string, gid: string) {
+  const match = url.match(/\/d\/([^/?#]+)/);
+  if (match?.[1]) return `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=csv&gid=${gid}`;
+  return url;
+}
+
+function filterParsedExpensesByMonth(rows: ParsedExpense[], month?: string | null) {
+  if (!month) return rows;
+  return rows.filter((row) => row.accountingMonth === month);
 }
 
 function parseExpenseRows(workbook: XLSX.WorkBook): ParsedExpense[] {
