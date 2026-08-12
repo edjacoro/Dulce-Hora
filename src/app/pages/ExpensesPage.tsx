@@ -87,6 +87,17 @@ const emptyWithdrawalForm = (): WithdrawalForm => ({
   notes: ""
 });
 
+type ExpenseImportResult = {
+  rowsReceived: number;
+  rowsCreated: number;
+  rowsUpdated: number;
+  byAccountingMonth?: Array<{
+    month: string;
+    records: number;
+    total: number;
+  }>;
+};
+
 export function ExpensesPage() {
   const queryClient = useQueryClient();
   const [month, setMonth] = useState(() => today().slice(0, 7));
@@ -115,7 +126,7 @@ export function ExpensesPage() {
 
   const importSheet = useMutation({
     mutationFn: () =>
-      api<{ rowsReceived: number; rowsCreated: number; rowsUpdated: number }>("/api/imports/expenses-sheet", {
+      api<ExpenseImportResult>("/api/imports/expenses-sheet", {
         method: "POST",
         body: JSON.stringify({})
       }),
@@ -244,6 +255,11 @@ export function ExpensesPage() {
           <strong>{importSheet.data.rowsReceived} filas leidas</strong>
           <span>{importSheet.data.rowsCreated} nuevas</span>
           <span>{importSheet.data.rowsUpdated} actualizadas</span>
+          {(importSheet.data.byAccountingMonth ?? []).map((row) => (
+            <span key={row.month}>
+              {monthName(row.month)}: {row.records} filas - {formatCurrency(row.total)}
+            </span>
+          ))}
         </div>
       ) : null}
       {importSheet.error ? <p className="form-error">{importSheet.error.message}</p> : null}

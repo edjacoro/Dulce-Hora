@@ -17,6 +17,7 @@ type Queryable = {
 
 type ParsedExpense = {
   expenseDate: string;
+  accountingMonth: string;
   categoryName: string;
   status: "paid" | "pending";
   amount: number;
@@ -24,6 +25,7 @@ type ParsedExpense = {
   paymentMethod: string | null;
   paymentType: PaymentType;
   externalId: string;
+  legacyExternalIds: string[];
 };
 
 type PaymentType = "cash" | "bank" | "virtual" | "posnet" | "credit_card" | "deferred" | "other";
@@ -549,16 +551,9 @@ export function registerExpenseRoutes(app: Express) {
       for (const row of parsed) {
         const categoryId = await ensureExpenseCategory(tx, req.user!.organization_id, row.categoryName);
         categories.add(row.categoryName);
-        const existing = await tx.query<{ id: string }>(
-          `select id
-           from expenses
-           where branch_id = $1
-             and source = 'google-sheet-expenses'
-             and external_id = $2`,
-          [branch.id, row.externalId]
-        );
+        const existing = await findExistingImportedExpense(tx, branch.id, row);
 
-        if (existing.rows[0]) {
+        if (existing) {
           updated += 1;
           const prepared = prepareImportedExpense(row);
           await tx.query(
@@ -575,8 +570,9 @@ export function registerExpenseRoutes(app: Express) {
                  accounting_month = $9,
                  paid_date = $10,
                  payment_type = $11,
-                 cash_account = $12
-             where id = $13`,
+                 cash_account = $12,
+                 external_id = $13
+             where id = $14`,
             [
               row.expenseDate,
               categoryId,
@@ -590,7 +586,8 @@ export function registerExpenseRoutes(app: Express) {
               prepared.paidDate,
               prepared.paymentType,
               prepared.cashAccount,
-              existing.rows[0].id
+              row.externalId,
+              existing.id
             ]
           );
           continue;
@@ -648,6 +645,7 @@ export function registerExpenseRoutes(app: Express) {
       rowsReceived: parsed.length,
       rowsCreated: created,
       rowsUpdated: updated,
+      byAccountingMonth: summarizeParsedExpenses(parsed),
       categories: [...categories].sort((a, b) => a.localeCompare(b, "es-AR"))
     });
   });
@@ -711,7 +709,7 @@ function prepareImportedExpense(input: ParsedExpense) {
     input.status === "pending" && input.paymentType === "credit_card" ? nextCreditCardPaymentDate(input.expenseDate) : null;
 
   return {
-    accountingMonth: input.expenseDate.slice(0, 7),
+    accountingMonth: input.accountingMonth,
     paidDate: input.status === "paid" ? input.expenseDate : null,
     paymentType: input.paymentType,
     paymentMethod: input.paymentMethod || defaultPaymentMethod(input.paymentType),
@@ -719,6 +717,59 @@ function prepareImportedExpense(input: ParsedExpense) {
     dueDate,
     cashAccount: defaultCashAccountForPayment(input.paymentMethod, input.paymentType)
   };
+}
+
+async function findExistingImportedExpense(queryable: Queryable, branchId: string, row: ParsedExpense) {
+  const externalIds = [row.externalId, ...row.legacyExternalIds];
+  const byExternalId = await queryable.query<{ id: string }>(
+    `select id
+     from expenses
+     where branch_id = $1
+       and source = 'google-sheet-expenses'
+       and external_id = any($2::text[])
+     limit 1`,
+    [branchId, externalIds]
+  );
+
+  if (byExternalId.rows[0]) return byExternalId.rows[0];
+
+  const byContent = await queryable.query<{ id: string }>(
+    `select e.id
+     from expenses e
+     left join expense_categories ec on ec.id = e.category_id
+     where e.branch_id = $1
+       and e.source = 'google-sheet-expenses'
+       and (
+         coalesce(e.accounting_month, substring(e.expense_date::text from 1 for 7)) = $2
+         or e.expense_date = $3
+       )
+       and lower(coalesce(ec.name, '')) = lower($4)
+       and abs(e.amount - $5) < 0.01
+       and coalesce(e.description, '') = $6
+     order by e.created_at desc
+     limit 1`,
+    [branchId, row.accountingMonth, row.expenseDate, row.categoryName, row.amount, row.description || ""]
+  );
+
+  return byContent.rows[0] ?? null;
+}
+
+function summarizeParsedExpenses(rows: ParsedExpense[]) {
+  const summary = new Map<string, { month: string; records: number; total: number }>();
+  for (const row of rows) {
+    const current = summary.get(row.accountingMonth) ?? { month: row.accountingMonth, records: 0, total: 0 };
+    current.records += 1;
+    current.total += row.amount;
+    summary.set(row.accountingMonth, current);
+  }
+
+  return [...summary.values()]
+    .sort((a, b) => a.month.localeCompare(b.month))
+    .map((row) => ({
+      month: row.month,
+      records: row.records,
+      total: roundMoney(row.total)
+    }));
 }
 
 function defaultCashAccountForPayment(paymentMethod: string | null | undefined, paymentType: PaymentType | "bank"): CashAccount {
@@ -812,18 +863,30 @@ function spreadsheetDownloadUrl(url: string) {
 }
 
 function parseExpenseRows(workbook: XLSX.WorkBook): ParsedExpense[] {
-  const sheetName =
-    workbook.SheetNames.find((name) => normalize(name).includes("control de gastos")) ??
-    workbook.SheetNames.find((name) => normalize(name).includes("gasto"));
+  const candidates = workbook.SheetNames.map((sheetName) => {
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
+      header: 1,
+      raw: true,
+      defval: "",
+      blankrows: false
+    });
+    return {
+      sheetName,
+      rows: parseExpenseRowsFromRows(rows)
+    };
+  }).filter((candidate) => candidate.rows.length > 0);
 
-  if (!sheetName) return [];
-
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
-    header: 1,
-    raw: true,
-    defval: "",
-    blankrows: false
+  candidates.sort((a, b) => {
+    const aScore = expenseSheetScore(a.sheetName);
+    const bScore = expenseSheetScore(b.sheetName);
+    if (aScore !== bScore) return bScore - aScore;
+    return b.rows.length - a.rows.length;
   });
+
+  return candidates[0]?.rows ?? [];
+}
+
+function parseExpenseRowsFromRows(rows: unknown[][]): ParsedExpense[] {
   const headerIndex = rows.findIndex((row) => {
     const cells = row.map((cell) => normalize(cell));
     return cells.includes("categoria") && cells.includes("monto") && cells.includes("descripcion");
@@ -842,6 +905,7 @@ function parseExpenseRows(workbook: XLSX.WorkBook): ParsedExpense[] {
   const descriptionIndex = index("descripcion");
   const paymentIndex = index("forma");
   const parsed: ParsedExpense[] = [];
+  const externalIdCounts = new Map<string, number>();
 
   for (let rowIndex = headerIndex + 1; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex];
@@ -851,23 +915,38 @@ function parseExpenseRows(workbook: XLSX.WorkBook): ParsedExpense[] {
 
     const year = toNumber(row[yearIndex]);
     const monthName = toText(row[monthIndex]);
-    const expenseDate = parseDate(row[dateIndex], year, monthName);
+    const accountingMonth = parseAccountingMonth(year, monthName);
+    const expenseDate = parseDate(row[dateIndex], year, monthName) ?? (accountingMonth ? `${accountingMonth}-01` : null);
     if (!expenseDate) continue;
 
     const description = toText(row[descriptionIndex]);
+    const paymentMethod = toText(row[paymentIndex]) || null;
+    const externalIdBase = stableExternalId(expenseDate, accountingMonth ?? expenseDate.slice(0, 7), categoryName, amount, description, paymentMethod);
+    const externalIdCount = (externalIdCounts.get(externalIdBase) ?? 0) + 1;
+    externalIdCounts.set(externalIdBase, externalIdCount);
     parsed.push({
       expenseDate,
+      accountingMonth: accountingMonth ?? expenseDate.slice(0, 7),
       categoryName,
       status: normalize(row[statusIndex]).includes("pendiente") ? "pending" : "paid",
       amount,
       description,
-      paymentMethod: toText(row[paymentIndex]) || null,
-      paymentType: inferPaymentType(toText(row[paymentIndex])),
-      externalId: stableExternalId(rowIndex, expenseDate, categoryName, amount, description)
+      paymentMethod,
+      paymentType: inferPaymentType(paymentMethod ?? ""),
+      externalId: externalIdCount > 1 ? `${externalIdBase}:${externalIdCount}` : externalIdBase,
+      legacyExternalIds: [legacyExternalId(rowIndex, expenseDate, categoryName, amount, description)]
     });
   }
 
   return parsed;
+}
+
+function expenseSheetScore(sheetName: string) {
+  const normalized = normalize(sheetName);
+  if (normalized.includes("control de gastos")) return 3;
+  if (normalized.includes("gastos")) return 2;
+  if (normalized.includes("gasto")) return 1;
+  return 0;
 }
 
 function parseDate(value: unknown, year: number, monthName: string) {
@@ -897,7 +976,32 @@ function parseDate(value: unknown, year: number, monthName: string) {
   return null;
 }
 
-function stableExternalId(rowIndex: number, date: string, category: string, amount: number, description: string) {
+function parseAccountingMonth(year: number, monthName: string) {
+  const month = monthNumber(monthName);
+  if (year > 2000 && month) return `${year}-${String(month).padStart(2, "0")}`;
+  return null;
+}
+
+function stableExternalId(
+  date: string,
+  accountingMonth: string,
+  category: string,
+  amount: number,
+  description: string,
+  paymentMethod: string | null
+) {
+  return [
+    "expense-sheet-v2",
+    accountingMonth,
+    date,
+    normalize(category).replaceAll(" ", "-"),
+    amount.toFixed(2),
+    normalize(description).slice(0, 60).replaceAll(" ", "-"),
+    normalize(paymentMethod ?? "").replaceAll(" ", "-")
+  ].join(":");
+}
+
+function legacyExternalId(rowIndex: number, date: string, category: string, amount: number, description: string) {
   return [
     "expense-sheet",
     rowIndex,
@@ -977,6 +1081,10 @@ function todayArgentina() {
 
 function sumRows(values: number[]) {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 function normalize(value: unknown) {
