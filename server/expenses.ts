@@ -554,15 +554,22 @@ export function registerExpenseRoutes(app: Express) {
     }
 
     if (parsed.length === 0) {
+      const removed = input.month
+        ? await deleteImportedExpensesForImport(db, branch.id, [input.month], [])
+        : 0;
       res.status(201).json({
         rowsReceived: 0,
         rowsScanned: parsedAll.length,
         rowsCreated: 0,
-        rowsUpdated: 0,
+        rowsUpdated: removed,
         byAccountingMonth: [],
         categories: [],
         source: loaded.source,
-        message: input.month ? `No encontre gastos para ${input.month}` : "No encontre gastos para importar"
+        message: input.month
+          ? removed > 0
+            ? `No encontre gastos para ${input.month}; limpie ${removed} registros importados viejos`
+            : `No encontre gastos para ${input.month}`
+          : "No encontre gastos para importar"
       });
       return;
     }
@@ -570,54 +577,15 @@ export function registerExpenseRoutes(app: Express) {
     let created = 0;
     let updated = 0;
     const categories = new Set<string>();
+    const importMonths = [...new Set(parsed.map((row) => row.accountingMonth))];
 
     await db.transaction(async (tx) => {
+      const externalIdsToReplace = [...new Set(parsed.flatMap((row) => [row.externalId, ...row.legacyExternalIds]))];
+      updated = await deleteImportedExpensesForImport(tx, branch.id, importMonths, externalIdsToReplace);
+
       for (const row of parsed) {
         const categoryId = await ensureExpenseCategory(tx, req.user!.organization_id, row.categoryName);
         categories.add(row.categoryName);
-        const existing = await findExistingImportedExpense(tx, branch.id, row);
-
-        if (existing) {
-          updated += 1;
-          const prepared = prepareImportedExpense(row);
-          await tx.query(
-            `update expenses
-             set expense_date = $1,
-                 category_id = $2,
-                 supplier = null,
-                 description = $3,
-                 amount = $4,
-                 payment_method = $5,
-                 status = $6,
-                 deferred = $7,
-                 due_date = $8,
-                 accounting_month = $9,
-                 paid_date = $10,
-                 payment_type = $11,
-                 cash_account = $12,
-                 external_id = $13
-             where id = $14`,
-            [
-              row.expenseDate,
-              categoryId,
-              row.description || null,
-              row.amount,
-              prepared.paymentMethod,
-              row.status,
-              prepared.deferred,
-              prepared.dueDate,
-              prepared.accountingMonth,
-              prepared.paidDate,
-              prepared.paymentType,
-              prepared.cashAccount,
-              row.externalId,
-              existing.id
-            ]
-          );
-          continue;
-        }
-
-        created += 1;
         const prepared = prepareImportedExpense(row);
         await tx.query(
           `insert into expenses
@@ -645,6 +613,7 @@ export function registerExpenseRoutes(app: Express) {
             prepared.cashAccount
           ]
         );
+        created += 1;
       }
 
       await tx.query(
@@ -903,7 +872,7 @@ async function downloadCsvWorkbook(url: string, gid: string) {
   if (/<html[\s>]/i.test(text.slice(0, 500))) {
     throw new Error("Google Drive devolvio una pagina HTML en vez de la hoja de gastos");
   }
-  return XLSX.read(text, { type: "string", cellDates: true });
+  return XLSX.read(text, { type: "string", raw: true });
 }
 
 async function downloadWorkbook(url: string) {
@@ -935,6 +904,38 @@ function spreadsheetCsvDownloadUrl(url: string, gid: string) {
   const match = url.match(/\/d\/([^/?#]+)/);
   if (match?.[1]) return `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=csv&gid=${gid}`;
   return url;
+}
+
+async function deleteImportedExpensesForImport(
+  queryable: Queryable,
+  branchId: string,
+  accountingMonths: string[],
+  externalIds: string[]
+) {
+  const clauses: string[] = [];
+  const params: unknown[] = [branchId];
+
+  if (accountingMonths.length > 0) {
+    params.push(accountingMonths);
+    clauses.push(`coalesce(accounting_month, substring(expense_date::text from 1 for 7)) = any($${params.length}::text[])`);
+  }
+
+  if (externalIds.length > 0) {
+    params.push(externalIds);
+    clauses.push(`external_id = any($${params.length}::text[])`);
+  }
+
+  if (clauses.length === 0) return 0;
+
+  const removed = await queryable.query<{ id: string }>(
+    `delete from expenses
+     where branch_id = $1
+       and source = 'google-sheet-expenses'
+       and (${clauses.join(" or ")})
+     returning id`,
+    params
+  );
+  return removed.rows.length;
 }
 
 function filterParsedExpensesByMonth(rows: ParsedExpense[], month?: string | null) {
