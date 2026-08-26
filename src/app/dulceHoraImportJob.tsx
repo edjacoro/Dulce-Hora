@@ -44,6 +44,8 @@ type StartImportOptions = {
   date: string;
   maxRuns?: number;
   detailLimit?: number;
+  includeWaste?: boolean;
+  includeProductDetails?: boolean;
 };
 
 type DulceHoraImportJobContextValue = {
@@ -88,6 +90,8 @@ export function DulceHoraImportJobProvider({ children }: { children: ReactNode }
       const date = options.date;
       const maxRuns = options.maxRuns ?? 55;
       const detailLimit = options.detailLimit ?? 3;
+      const includeWaste = options.includeWaste ?? false;
+      const includeProductDetails = options.includeProductDetails ?? true;
 
       const job = (async () => {
         setState({
@@ -102,7 +106,7 @@ export function DulceHoraImportJobProvider({ children }: { children: ReactNode }
         try {
           const syncResult = await api<SyncResult>("/api/integration/dulce-hora/sync-date", {
             method: "POST",
-            body: JSON.stringify({ date, includeWaste: false, includeStatistics: false })
+            body: JSON.stringify({ date, includeWaste, includeStatistics: false })
           });
 
           await invalidateDulceHoraReporting(queryClient);
@@ -121,26 +125,28 @@ export function DulceHoraImportJobProvider({ children }: { children: ReactNode }
             error: null
           }));
 
-          const detailResult = await hydrateDulceHoraDetailsUntilDone({
-            date,
-            queryClient,
-            limit: detailLimit,
-            maxRuns,
-            onProgress: (progress) => {
-              setState((current) => ({
-                ...current,
-                active: true,
-                phase: "details",
+          const detailResult = includeProductDetails
+            ? await hydrateDulceHoraDetailsUntilDone({
                 date,
-                detailRun: progress.run,
-                detailTotalRuns: progress.totalRuns,
-                detailItemRows: progress.itemRows,
-                detailRecordsUpdated: progress.recordsUpdated,
-                detailRemaining: progress.remaining,
-                error: null
-              }));
-            }
-          });
+                queryClient,
+                limit: detailLimit,
+                maxRuns,
+                onProgress: (progress) => {
+                  setState((current) => ({
+                    ...current,
+                    active: true,
+                    phase: "details",
+                    date,
+                    detailRun: progress.run,
+                    detailTotalRuns: progress.totalRuns,
+                    detailItemRows: progress.itemRows,
+                    detailRecordsUpdated: progress.recordsUpdated,
+                    detailRemaining: progress.remaining,
+                    error: null
+                  }));
+                }
+              })
+            : { itemRows: 0, recordsUpdated: 0, detailRecordsRemaining: null };
 
           setState((current) => ({
             ...current,
@@ -207,7 +213,7 @@ export function DulceHoraImportJobBanner() {
 
   const isDone = state.phase === "done";
   const isError = state.phase === "error";
-  const title = state.phase === "syncing" ? "Importando ventas" : state.active ? "Completando productos" : isDone ? "Importacion lista" : "Importacion con error";
+  const title = state.phase === "syncing" ? "Sincronizando Dulce Hora" : state.active ? "Completando productos" : isDone ? "Importacion lista" : "Importacion con error";
 
   return (
     <div className={`background-import-banner ${isError ? "error" : isDone ? "done" : "active"}`}>

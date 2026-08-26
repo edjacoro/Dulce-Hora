@@ -4,6 +4,7 @@ import {
   ArrowRight,
   BadgeDollarSign,
   Building2,
+  CalendarSync,
   Clock3,
   Coffee,
   CreditCard,
@@ -15,7 +16,10 @@ import {
 import { useState } from "react";
 import { api, type SalesDocument, type SalesSummary } from "../api";
 import { SalesSectionTabs } from "../components/SalesSectionTabs";
+import { useDulceHoraImportJob } from "../dulceHoraImportJob";
 import { downloadSalesPdf } from "../reportPdf";
+import { useAutoDailyDulceHoraSync } from "../useAutoDailyDulceHoraSync";
+import { usePeriodUrlState } from "../usePeriodUrlState";
 import { useProductDetailHydration } from "../useProductDetailHydration";
 
 type SalesResponse = {
@@ -44,10 +48,17 @@ const emptyCorporateSaleForm = (): CorporateSaleForm => ({
 
 export function SalesPage() {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<PeriodMode>("day");
-  const [selectedDate, setSelectedDate] = useState(() => today());
-  const [from, setFrom] = useState(() => monthStart());
-  const [to, setTo] = useState(() => today());
+  const importJob = useDulceHoraImportJob();
+  const {
+    mode,
+    selectedDate,
+    from,
+    to,
+    setMode,
+    setSelectedDate,
+    setFrom,
+    setTo
+  } = usePeriodUrlState<PeriodMode>(["day", "range"], "day");
   const [corporateForm, setCorporateForm] = useState<CorporateSaleForm>(() => emptyCorporateSaleForm());
   const effectiveFrom = mode === "day" ? selectedDate : from;
   const effectiveTo = mode === "day" ? selectedDate : to;
@@ -89,9 +100,24 @@ export function SalesPage() {
     enabled: isDayMode && Boolean(stats?.tickets),
     coverage: itemDetailCoverage
   });
+  const selectedImport = importJob.state.date === selectedDate ? importJob.state : null;
+  const syncRunningForDate = Boolean(selectedImport?.active);
   const itemDetailNote =
     detailHydration.coverage < 0.99 ? `Detalle productos ${Math.round(detailHydration.coverage * 100)}%` : undefined;
   const ticketsPerHour = isDayMode ? ticketsPerOperatingHour(selectedDate, stats?.tickets ?? 0) : null;
+  useAutoDailyDulceHoraSync({
+    date: selectedDate,
+    enabled:
+      isDayMode &&
+      Boolean(summary.data) &&
+      !summary.isFetching &&
+      (stats?.documents ?? 0) === 0,
+    reason: "ventas",
+    includeWaste: true,
+    includeProductDetails: true,
+    maxRuns: 55,
+    detailLimit: 3
+  });
 
   return (
     <section className="page-section">
@@ -101,6 +127,23 @@ export function SalesPage() {
           <p>Estadisticas de facturacion sincronizada desde Dulce Hora</p>
         </div>
         <div className="heading-actions">
+          <button
+            className="secondary-button"
+            disabled={!isDayMode || importJob.state.active}
+            onClick={() => {
+              void importJob.startImport({
+                date: selectedDate,
+                includeWaste: true,
+                includeProductDetails: true,
+                maxRuns: 55,
+                detailLimit: 3
+              });
+            }}
+            type="button"
+          >
+            <CalendarSync size={17} aria-hidden="true" />
+            {syncRunningForDate ? "Sincronizando..." : "Sincronizar dia"}
+          </button>
           <button
             className="secondary-button"
             disabled={!summary.data}
@@ -134,6 +177,7 @@ export function SalesPage() {
           {detailHydration.remaining != null ? <span>{detailHydration.remaining} tickets pendientes</span> : null}
         </div>
       ) : null}
+      {selectedImport?.phase === "error" ? <p className="form-error">{selectedImport.error}</p> : null}
 
       <div className="kpi-grid">
         <Kpi
@@ -263,7 +307,7 @@ export function SalesPage() {
             <ReceiptText size={22} aria-hidden="true" />
             <div>
               <h2>Sin comprobantes importados</h2>
-              <p>Usa Importaciones para sincronizar una fecha desde Dulce Hora.</p>
+              <p>Sincroniza este dia desde el boton superior para traerlo desde Dulce Hora.</p>
             </div>
           </div>
         </section>

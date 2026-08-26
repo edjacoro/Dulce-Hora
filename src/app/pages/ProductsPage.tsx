@@ -4,6 +4,7 @@ import {
   ArrowRight,
   ArrowUpDown,
   BadgeDollarSign,
+  CalendarSync,
   Download,
   PackageSearch,
   ReceiptText,
@@ -15,7 +16,10 @@ import {
 import { useMemo, useState } from "react";
 import { api, type ProductPerformance } from "../api";
 import { SalesSectionTabs } from "../components/SalesSectionTabs";
+import { useDulceHoraImportJob } from "../dulceHoraImportJob";
 import { downloadProductsPdf } from "../reportPdf";
+import { useAutoDailyDulceHoraSync } from "../useAutoDailyDulceHoraSync";
+import { usePeriodUrlState } from "../usePeriodUrlState";
 import { useProductDetailHydration } from "../useProductDetailHydration";
 
 type PeriodMode = "day" | "month" | "range";
@@ -34,11 +38,19 @@ type ProductSortKey =
   | "signal";
 
 export function ProductsPage() {
-  const [mode, setMode] = useState<PeriodMode>("day");
-  const [selectedDate, setSelectedDate] = useState(() => today());
-  const [selectedMonth, setSelectedMonth] = useState(() => today().slice(0, 7));
-  const [from, setFrom] = useState(() => monthStart());
-  const [to, setTo] = useState(() => today());
+  const importJob = useDulceHoraImportJob();
+  const {
+    mode,
+    selectedDate,
+    selectedMonth,
+    from,
+    to,
+    setMode,
+    setSelectedDate,
+    setSelectedMonth,
+    setFrom,
+    setTo
+  } = usePeriodUrlState<PeriodMode>(["day", "month", "range"], "day");
   const [sort, setSort] = useState<{ key: ProductSortKey; direction: SortDirection }>({
     key: "revenue",
     direction: "desc"
@@ -56,6 +68,8 @@ export function ProductsPage() {
     date: selectedDate,
     enabled: mode === "day"
   });
+  const selectedImport = importJob.state.date === selectedDate ? importJob.state : null;
+  const syncRunningForDate = Boolean(selectedImport?.active);
 
   const data = performance.data;
   const products = useMemo(() => data?.products ?? [], [data?.products]);
@@ -72,6 +86,19 @@ export function ProductsPage() {
     .sort((a, b) => a.share - b.share || b.wasteCost - a.wasteCost)
     .slice(0, 5);
   const activePeriodLabel = periodLabel(mode, period.from, period.to);
+  useAutoDailyDulceHoraSync({
+    date: selectedDate,
+    enabled:
+      mode === "day" &&
+      Boolean(data) &&
+      !performance.isFetching &&
+      (data?.summary.tickets ?? 0) === 0,
+    reason: "productos",
+    includeWaste: true,
+    includeProductDetails: true,
+    maxRuns: 55,
+    detailLimit: 3
+  });
 
   return (
     <section className="page-section products-page">
@@ -81,6 +108,23 @@ export function ProductsPage() {
           <p>Ranking de ventas, rotacion y merma cruzada por producto</p>
         </div>
         <div className="heading-actions">
+          <button
+            className="secondary-button"
+            disabled={mode !== "day" || importJob.state.active}
+            onClick={() => {
+              void importJob.startImport({
+                date: selectedDate,
+                includeWaste: true,
+                includeProductDetails: true,
+                maxRuns: 55,
+                detailLimit: 3
+              });
+            }}
+            type="button"
+          >
+            <CalendarSync size={17} aria-hidden="true" />
+            {syncRunningForDate ? "Sincronizando..." : "Sincronizar dia"}
+          </button>
           <button
             className="secondary-button"
             disabled={!data}
@@ -116,6 +160,7 @@ export function ProductsPage() {
           {detailHydration.remaining != null ? <span>{detailHydration.remaining} tickets pendientes</span> : null}
         </div>
       ) : null}
+      {selectedImport?.phase === "error" ? <p className="form-error">{selectedImport.error}</p> : null}
 
       {performance.isLoading ? (
         <section className="content-band">

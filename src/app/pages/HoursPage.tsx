@@ -6,6 +6,7 @@ import {
   BadgeDollarSign,
   BarChart3,
   CalendarDays,
+  CalendarSync,
   Clock3,
   ReceiptText,
   ShoppingBag,
@@ -15,6 +16,9 @@ import {
 import { useMemo, useState } from "react";
 import { api, type HourPerformance } from "../api";
 import { SalesSectionTabs } from "../components/SalesSectionTabs";
+import { useDulceHoraImportJob } from "../dulceHoraImportJob";
+import { useAutoDailyDulceHoraSync } from "../useAutoDailyDulceHoraSync";
+import { usePeriodUrlState } from "../usePeriodUrlState";
 import { useProductDetailHydration } from "../useProductDetailHydration";
 
 type PeriodMode = "day" | "month" | "range";
@@ -46,11 +50,19 @@ type WeekdaySortKey =
   | "signal";
 
 export function HoursPage() {
-  const [mode, setMode] = useState<PeriodMode>("day");
-  const [selectedDate, setSelectedDate] = useState(() => today());
-  const [selectedMonth, setSelectedMonth] = useState(() => today().slice(0, 7));
-  const [from, setFrom] = useState(() => monthStart());
-  const [to, setTo] = useState(() => today());
+  const importJob = useDulceHoraImportJob();
+  const {
+    mode,
+    selectedDate,
+    selectedMonth,
+    from,
+    to,
+    setMode,
+    setSelectedDate,
+    setSelectedMonth,
+    setFrom,
+    setTo
+  } = usePeriodUrlState<PeriodMode>(["day", "month", "range"], "day");
   const [sort, setSort] = useState<{ key: HourSortKey; direction: SortDirection }>({
     key: "revenue",
     direction: "desc"
@@ -72,6 +84,8 @@ export function HoursPage() {
     date: selectedDate,
     enabled: mode === "day"
   });
+  const selectedImport = importJob.state.date === selectedDate ? importJob.state : null;
+  const syncRunningForDate = Boolean(selectedImport?.active);
 
   const data = performance.data;
   const hours = useMemo(() => data?.hours ?? [], [data?.hours]);
@@ -90,6 +104,15 @@ export function HoursPage() {
     .filter((weekday) => weekday.revenue > 0 || weekday.tickets > 0)
     .sort((a, b) => a.revenuePerDay - b.revenuePerDay || a.ticketsPerDay - b.ticketsPerDay)
     .slice(0, 5);
+  useAutoDailyDulceHoraSync({
+    date: selectedDate,
+    enabled: mode === "day" && Boolean(data) && !performance.isFetching && (data?.summary.tickets ?? 0) === 0,
+    reason: "horarios",
+    includeWaste: true,
+    includeProductDetails: true,
+    maxRuns: 55,
+    detailLimit: 3
+  });
 
   return (
     <section className="page-section hours-page">
@@ -98,18 +121,37 @@ export function HoursPage() {
           <h1>Horarios</h1>
           <p>Horas fuertes y debiles por venta, tickets y ticket promedio</p>
         </div>
-        <HourPeriodControls
-          mode={mode}
-          selectedDate={selectedDate}
-          selectedMonth={selectedMonth}
-          from={from}
-          to={to}
-          onMode={setMode}
-          onDate={setSelectedDate}
-          onMonth={setSelectedMonth}
-          onFrom={setFrom}
-          onTo={setTo}
-        />
+        <div className="heading-actions">
+          <button
+            className="secondary-button"
+            disabled={mode !== "day" || importJob.state.active}
+            onClick={() => {
+              void importJob.startImport({
+                date: selectedDate,
+                includeWaste: true,
+                includeProductDetails: true,
+                maxRuns: 55,
+                detailLimit: 3
+              });
+            }}
+            type="button"
+          >
+            <CalendarSync size={17} aria-hidden="true" />
+            {syncRunningForDate ? "Sincronizando..." : "Sincronizar dia"}
+          </button>
+          <HourPeriodControls
+            mode={mode}
+            selectedDate={selectedDate}
+            selectedMonth={selectedMonth}
+            from={from}
+            to={to}
+            onMode={setMode}
+            onDate={setSelectedDate}
+            onMonth={setSelectedMonth}
+            onFrom={setFrom}
+            onTo={setTo}
+          />
+        </div>
       </div>
 
       <SalesSectionTabs />
@@ -121,6 +163,7 @@ export function HoursPage() {
           {detailHydration.remaining != null ? <span>{detailHydration.remaining} tickets pendientes</span> : null}
         </div>
       ) : null}
+      {selectedImport?.phase === "error" ? <p className="form-error">{selectedImport.error}</p> : null}
 
       {performance.isLoading ? (
         <section className="content-band">

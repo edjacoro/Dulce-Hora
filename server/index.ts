@@ -632,16 +632,37 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
       params
     ),
     db.query(
-      `select coalesce(p.canonical_name, si.original_name) as label,
-              coalesce(sum(si.quantity), 0)::text as quantity,
-              coalesce(sum(si.line_total), 0)::text as total
-       from sale_items si
-       join sales_documents sd on sd.id = si.sales_document_id
-       join branches b on b.id = sd.branch_id
-       left join products p on p.id = si.normalized_product_id
-       where ${where} and sd.status = 'active'
-       group by coalesce(p.canonical_name, si.original_name)
-       order by coalesce(sum(si.line_total), 0) desc
+      `with item_lines as (
+         select si.quantity,
+                si.line_total::numeric as line_total,
+                si.original_name,
+                si.normalized_product_id,
+                sd.total::numeric as document_total,
+                coalesce(sum(si.line_total::numeric) over (partition by sd.id), 0) as document_item_total
+         from sale_items si
+         join sales_documents sd on sd.id = si.sales_document_id
+         join branches b on b.id = sd.branch_id
+         where ${where} and sd.status = 'active'
+       )
+       select coalesce(p.canonical_name, il.original_name) as label,
+              coalesce(sum(il.quantity), 0)::text as quantity,
+              coalesce(sum(
+                case
+                  when il.document_item_total > 0
+                  then il.line_total * il.document_total / il.document_item_total
+                  else il.line_total
+                end
+              ), 0)::text as total
+       from item_lines il
+       left join products p on p.id = il.normalized_product_id
+       group by coalesce(p.canonical_name, il.original_name)
+       order by coalesce(sum(
+         case
+           when il.document_item_total > 0
+           then il.line_total * il.document_total / il.document_item_total
+           else il.line_total
+         end
+       ), 0) desc
        limit 10`,
       params
     )
@@ -735,6 +756,12 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
   addDateRangeFilter(wasteFilters, wasteParams, "wr.date", range);
 
   const productKey = "coalesce(si.normalized_product_id, 'raw:' || lower(si.original_name))";
+  const itemBaseProductKey = "coalesce(il.normalized_product_id, 'raw:' || lower(il.original_name))";
+  const allocatedItemRevenue = `case
+    when il.document_item_total > 0
+    then il.line_total * il.document_total / il.document_item_total
+    else il.line_total
+  end`;
   const wasteKey = "coalesce(wr.product_id, 'waste:' || coalesce(p.canonical_name, 'Producto sin nombre'))";
 
   const [salesRows, salesTotals, wasteRows] = await Promise.all([
@@ -746,19 +773,30 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
       revenue: string;
       tickets: string;
     }>(
-      `select ${productKey} as product_key,
-              coalesce(p.canonical_name, si.original_name) as label,
+      `with item_lines as (
+         select si.id,
+                si.quantity,
+                si.line_total::numeric as line_total,
+                si.original_name,
+                si.normalized_product_id,
+                sd.id as sales_document_id,
+                sd.total::numeric as document_total,
+                coalesce(sum(si.line_total::numeric) over (partition by sd.id), 0) as document_item_total
+         from sale_items si
+         join sales_documents sd on sd.id = si.sales_document_id
+         join branches b on b.id = sd.branch_id
+         where ${salesFilters.join(" and ")}
+       )
+       select ${itemBaseProductKey} as product_key,
+              coalesce(p.canonical_name, il.original_name) as label,
               coalesce(c.name, 'Sin categoria') as category,
-              coalesce(sum(si.quantity), 0)::text as quantity_sold,
-              coalesce(sum(si.line_total), 0)::text as revenue,
-              count(distinct sd.id)::text as tickets
-       from sale_items si
-       join sales_documents sd on sd.id = si.sales_document_id
-       join branches b on b.id = sd.branch_id
-       left join products p on p.id = si.normalized_product_id
+              coalesce(sum(il.quantity), 0)::text as quantity_sold,
+              coalesce(sum(${allocatedItemRevenue}), 0)::text as revenue,
+              count(distinct il.sales_document_id)::text as tickets
+       from item_lines il
+       left join products p on p.id = il.normalized_product_id
        left join categories c on c.id = p.category_id
-       where ${salesFilters.join(" and ")}
-       group by ${productKey}, coalesce(p.canonical_name, si.original_name), coalesce(c.name, 'Sin categoria')`,
+       group by ${itemBaseProductKey}, coalesce(p.canonical_name, il.original_name), coalesce(c.name, 'Sin categoria')`,
       salesParams
     ),
     queryOne<{
@@ -768,16 +806,27 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
       tickets: string;
       products: string;
     }>(
-      `select coalesce(sum(si.line_total), 0)::text as revenue,
-              coalesce(sum(si.quantity), 0)::text as quantity_sold,
-              count(si.id)::text as item_lines,
-              count(distinct sd.id)::text as tickets,
-              count(distinct ${productKey})::text as products
-       from sale_items si
-       join sales_documents sd on sd.id = si.sales_document_id
-       join branches b on b.id = sd.branch_id
-       left join products p on p.id = si.normalized_product_id
-       where ${salesFilters.join(" and ")}`,
+      `with item_lines as (
+         select si.id,
+                si.quantity,
+                si.line_total::numeric as line_total,
+                si.original_name,
+                si.normalized_product_id,
+                sd.id as sales_document_id,
+                sd.total::numeric as document_total,
+                coalesce(sum(si.line_total::numeric) over (partition by sd.id), 0) as document_item_total
+         from sale_items si
+         join sales_documents sd on sd.id = si.sales_document_id
+         join branches b on b.id = sd.branch_id
+         where ${salesFilters.join(" and ")}
+       )
+       select coalesce(sum(${allocatedItemRevenue}), 0)::text as revenue,
+              coalesce(sum(il.quantity), 0)::text as quantity_sold,
+              count(il.id)::text as item_lines,
+              count(distinct il.sales_document_id)::text as tickets,
+              count(distinct ${itemBaseProductKey})::text as products
+       from item_lines il
+       left join products p on p.id = il.normalized_product_id`,
       salesParams
     ),
     db.query<{

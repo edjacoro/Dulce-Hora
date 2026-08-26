@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, CalendarDays, Download, PackageSearch, ReceiptText, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, ArrowRight, CalendarDays, CalendarSync, Download, PackageSearch, ReceiptText, Trash2 } from "lucide-react";
 import { api, type WasteRecord, type WasteSummary } from "../api";
+import { useDulceHoraImportJob } from "../dulceHoraImportJob";
 import { downloadWastePdf } from "../reportPdf";
+import { useAutoDailyDulceHoraSync } from "../useAutoDailyDulceHoraSync";
+import { usePeriodUrlState } from "../usePeriodUrlState";
 
 type WasteResponse = {
   records: WasteRecord[];
@@ -11,10 +13,17 @@ type WasteResponse = {
 type PeriodMode = "day" | "range";
 
 export function WastePage() {
-  const [mode, setMode] = useState<PeriodMode>("day");
-  const [selectedDate, setSelectedDate] = useState(() => today());
-  const [from, setFrom] = useState(() => monthStart());
-  const [to, setTo] = useState(() => today());
+  const importJob = useDulceHoraImportJob();
+  const {
+    mode,
+    selectedDate,
+    from,
+    to,
+    setMode,
+    setSelectedDate,
+    setFrom,
+    setTo
+  } = usePeriodUrlState<PeriodMode>(["day", "range"], "day");
   const effectiveFrom = mode === "day" ? selectedDate : from;
   const effectiveTo = mode === "day" ? selectedDate : to;
   const query = dateQuery(effectiveFrom, effectiveTo);
@@ -33,6 +42,16 @@ export function WastePage() {
   const stats = summary.data?.summary;
   const isDayMode = mode === "day";
   const activePeriodLabel = isDayMode ? formatFullDate(selectedDate) : `${from} al ${to}`;
+  const selectedImport = importJob.state.date === selectedDate ? importJob.state : null;
+  const syncRunningForDate = Boolean(selectedImport?.active);
+  useAutoDailyDulceHoraSync({
+    date: selectedDate,
+    enabled: isDayMode && Boolean(summary.data) && !summary.isFetching && (stats?.records ?? 0) === 0,
+    reason: "mermas",
+    includeWaste: true,
+    includeProductDetails: false,
+    maxRuns: 0
+  });
 
   return (
     <section className="page-section">
@@ -42,6 +61,22 @@ export function WastePage() {
           <p>Desperdicios sincronizados desde Dulce Hora</p>
         </div>
         <div className="heading-actions">
+          <button
+            className="secondary-button"
+            disabled={!isDayMode || importJob.state.active}
+            onClick={() => {
+              void importJob.startImport({
+                date: selectedDate,
+                includeWaste: true,
+                includeProductDetails: false,
+                maxRuns: 0
+              });
+            }}
+            type="button"
+          >
+            <CalendarSync size={17} aria-hidden="true" />
+            {syncRunningForDate ? "Sincronizando..." : "Sincronizar dia"}
+          </button>
           <button
             className="secondary-button"
             disabled={!summary.data}
@@ -65,6 +100,7 @@ export function WastePage() {
           />
         </div>
       </div>
+      {selectedImport?.phase === "error" ? <p className="form-error">{selectedImport.error}</p> : null}
 
       <div className="kpi-grid">
         <Kpi
@@ -84,7 +120,7 @@ export function WastePage() {
             <Trash2 size={22} aria-hidden="true" />
             <div>
               <h2>Sin mermas cargadas</h2>
-              <p>Sincroniza una fecha en Importaciones para traer los desperdicios del panel.</p>
+              <p>Sincroniza este dia desde el boton superior para traer los desperdicios del panel.</p>
             </div>
           </div>
         </section>
