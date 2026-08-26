@@ -129,23 +129,6 @@ export function SalesPage() {
         <div className="heading-actions">
           <button
             className="secondary-button"
-            disabled={!isDayMode || importJob.state.active}
-            onClick={() => {
-              void importJob.startImport({
-                date: selectedDate,
-                includeWaste: true,
-                includeProductDetails: true,
-                maxRuns: 55,
-                detailLimit: 3
-              });
-            }}
-            type="button"
-          >
-            <CalendarSync size={17} aria-hidden="true" />
-            {syncRunningForDate ? "Sincronizando..." : "Sincronizar dia"}
-          </button>
-          <button
-            className="secondary-button"
             disabled={!summary.data}
             onClick={() => {
               if (summary.data) void downloadSalesPdf(summary.data, documents, activePeriodLabel);
@@ -164,6 +147,17 @@ export function SalesPage() {
             onDate={setSelectedDate}
             onFrom={setFrom}
             onTo={setTo}
+            onSyncDay={() => {
+              void importJob.startImport({
+                date: selectedDate,
+                includeWaste: true,
+                includeProductDetails: true,
+                maxRuns: 55,
+                detailLimit: 3
+              });
+            }}
+            syncDisabled={!isDayMode || importJob.state.active}
+            syncRunning={syncRunningForDate}
           />
         </div>
       </div>
@@ -420,6 +414,9 @@ type PeriodControlsProps = DateFiltersProps & {
   selectedDate: string;
   onMode: (value: PeriodMode) => void;
   onDate: (value: string) => void;
+  onSyncDay: () => void;
+  syncDisabled: boolean;
+  syncRunning: boolean;
 };
 
 function PeriodControls({
@@ -430,24 +427,39 @@ function PeriodControls({
   onMode,
   onDate,
   onFrom,
-  onTo
+  onTo,
+  onSyncDay,
+  syncDisabled,
+  syncRunning
 }: PeriodControlsProps) {
   return (
     <div className="period-controls">
-      <div className="control-tabs" aria-label="Modo de fechas">
+      <div className="period-mode-row">
+        <div className="control-tabs" aria-label="Modo de fechas">
+          <button
+            className={`mode-tab ${mode === "day" ? "active" : ""}`}
+            onClick={() => onMode("day")}
+            type="button"
+          >
+            Dia
+          </button>
+          <button
+            className={`mode-tab ${mode === "range" ? "active" : ""}`}
+            onClick={() => onMode("range")}
+            type="button"
+          >
+            Intervalo
+          </button>
+        </div>
         <button
-          className={`mode-tab ${mode === "day" ? "active" : ""}`}
-          onClick={() => onMode("day")}
+          className="primary-button period-sync-button"
+          disabled={syncDisabled}
+          onClick={onSyncDay}
+          title={mode === "day" ? "Importar ventas de la fecha seleccionada" : "Disponible en modo Dia"}
           type="button"
         >
-          Dia
-        </button>
-        <button
-          className={`mode-tab ${mode === "range" ? "active" : ""}`}
-          onClick={() => onMode("range")}
-          type="button"
-        >
-          Intervalo
+          <CalendarSync size={17} aria-hidden="true" />
+          {syncRunning ? "Importando..." : "Importar dia"}
         </button>
       </div>
 
