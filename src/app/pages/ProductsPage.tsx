@@ -62,7 +62,7 @@ export function ProductsPage() {
   const query = dateQuery(period.from, period.to);
   const performance = useQuery({
     queryKey: ["product-performance", period.from, period.to],
-    queryFn: () => api<ProductPerformance>(`/api/products/performance${query}&limit=200`)
+    queryFn: () => api<ProductPerformance>(`/api/products/performance${query}&limit=1000`)
   });
   const detailHydration = useProductDetailHydration({
     date: selectedDate,

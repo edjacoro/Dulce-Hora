@@ -2009,6 +2009,67 @@ a {
   align-items: end;
 }
 
+.weekday-picker {
+  grid-column: 1 / -1;
+}
+
+.weekday-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.weekday-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 900;
+  text-align: left;
+}
+
+.weekday-toggle.active {
+  border-color: #c7dce4;
+  background: #dcecf1;
+  color: #17394f;
+}
+
+.fake-check {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 2px solid #97a6b2;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.weekday-toggle.active .fake-check {
+  border-color: #507486;
+  background: #507486;
+}
+
+.weekday-toggle.active .fake-check::after {
+  content: "";
+  width: 8px;
+  height: 5px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+
+.analysis-filter-summary {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-weight: 800;
+}
+
 .analysis-bars {
   display: grid;
   gap: 10px;
@@ -2073,6 +2134,14 @@ a {
 
 .analysis-product-row:last-child {
   border-bottom: 0;
+}
+
+.muted-product-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.muted-product-row > span {
+  text-align: right;
 }
 
 .analysis-product-row > div {

@@ -149,7 +149,7 @@ type DateRange = {
   to: string | null;
 };
 
-type AnalysisReport = "hour" | "employee" | "weekday";
+type AnalysisReport = "hour" | "day" | "weekday" | "product" | "employee";
 
 type AnalysisMetric = "revenue" | "tickets" | "items";
 
@@ -744,7 +744,7 @@ app.post("/api/sales/corporate", requireRole(["owner", "administrator", "manager
 
 app.get("/api/products/performance", requireAuth, async (req, res) => {
   const range = readDateRange(req);
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 120), 20), 300);
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 500), 20), 1000);
   const organizationId = req.user!.organization_id;
 
   const salesParams: unknown[] = [organizationId];
@@ -1307,7 +1307,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
   const range = readAnalysisDateRange(req, today);
   const report = readAnalysisReport(req);
   const metric = readAnalysisMetric(req);
-  const weekday = readAnalysisWeekday(req);
+  const weekdays = readAnalysisWeekdays(req);
   const hourFrom = readAnalysisHour(req.query.hourFrom, 0);
   const hourTo = readAnalysisHour(req.query.hourTo, 23);
   const normalizedHourFrom = Math.min(hourFrom, hourTo);
@@ -1329,9 +1329,15 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
   const filters = ["b.organization_id = $1", "sd.status <> 'credited'"];
   addDateRangeFilter(filters, params, "sd.sale_date", range);
 
-  if (weekday !== null) {
-    params.push(weekday);
-    filters.push(`extract(dow from sd.sale_date)::int = $${params.length}`);
+  const wasteParams: unknown[] = [organizationId];
+  const wasteFilters = ["b.organization_id = $1"];
+  addDateRangeFilter(wasteFilters, wasteParams, "wr.date", range);
+
+  if (weekdays !== null && weekdays.length > 0) {
+    params.push(weekdays);
+    filters.push(`extract(dow from sd.sale_date)::int = any($${params.length}::int[])`);
+    wasteParams.push(weekdays);
+    wasteFilters.push(`extract(dow from wr.date)::int = any($${wasteParams.length}::int[])`);
   }
 
   params.push(normalizedHourFrom);
@@ -1362,6 +1368,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
   }
 
   const where = filters.join(" and ");
+  const wasteWhere = wasteFilters.join(" and ");
   const documentsCte = `with documents as (
     select sd.id,
            sd.branch_id,
@@ -1372,7 +1379,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
            ${netTotal} as revenue,
            case when sd.status = 'active' then 1 else 0 end as ticket_count,
            coalesce((
-             select count(si.id)
+             select sum(si.quantity)
              from sale_items si
              where si.sales_document_id = sd.id
            ), 0) as item_units
@@ -1380,8 +1387,13 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
     join branches b on b.id = sd.branch_id
     where ${where}
   )`;
+  const itemLineRevenue = `case
+    when il.document_item_total > 0
+    then il.line_total * il.document_total / il.document_item_total
+    else il.line_total
+  end`;
 
-  const [summary, segmentRows, topProducts, employees] = await Promise.all([
+  const [summary, segmentRows, topProducts, noSaleProducts, topWasteProducts, employees] = await Promise.all([
     queryOne<{
       revenue: string;
       documents: string;
@@ -1442,21 +1454,66 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
              order by weekday`,
             params
           )
-        : db.query<AnalysisSegmentRow>(
-            `${documentsCte}
-             select lpad(sale_hour::text, 2, '0') as segment_key,
-                    lpad(sale_hour::text, 2, '0') || ':00-' || lpad(sale_hour::text, 2, '0') || ':59' as label,
-                    null::text as color,
-                    coalesce(sum(revenue), 0)::text as revenue,
-                    count(id)::text as documents,
-                    coalesce(sum(ticket_count), 0)::text as tickets,
-                    coalesce(sum(item_units), 0)::text as item_units,
-                    count(distinct sale_date)::text as active_days
-             from documents
-             group by sale_hour
-             order by sale_hour`,
-            params
-          ),
+        : report === "day"
+          ? db.query<AnalysisSegmentRow>(
+              `${documentsCte}
+               select sale_date::text as segment_key,
+                      sale_date::text as label,
+                      null::text as color,
+                      coalesce(sum(revenue), 0)::text as revenue,
+                      count(id)::text as documents,
+                      coalesce(sum(ticket_count), 0)::text as tickets,
+                      coalesce(sum(item_units), 0)::text as item_units,
+                      1::text as active_days
+               from documents
+               group by sale_date
+               order by sale_date`,
+              params
+            )
+          : report === "product"
+            ? db.query<AnalysisSegmentRow>(
+                `${documentsCte}, item_lines as (
+                   select si.quantity,
+                          si.line_total::numeric as line_total,
+                          si.original_name,
+                          si.normalized_product_id,
+                          d.id as sales_document_id,
+                          d.sale_date,
+                          d.ticket_count,
+                          d.revenue::numeric as document_total,
+                          coalesce(sum(si.line_total::numeric) over (partition by d.id), 0) as document_item_total
+                   from documents d
+                   join sale_items si on si.sales_document_id = d.id
+                 )
+                 select coalesce(il.normalized_product_id, 'raw:' || lower(il.original_name)) as segment_key,
+                        coalesce(p.canonical_name, il.original_name) as label,
+                        null::text as color,
+                        coalesce(sum(${itemLineRevenue}), 0)::text as revenue,
+                        count(distinct il.sales_document_id)::text as documents,
+                        count(distinct case when il.ticket_count = 1 then il.sales_document_id end)::text as tickets,
+                        coalesce(sum(il.quantity), 0)::text as item_units,
+                        count(distinct il.sale_date)::text as active_days
+                 from item_lines il
+                 left join products p on p.id = il.normalized_product_id
+                 group by coalesce(il.normalized_product_id, 'raw:' || lower(il.original_name)), coalesce(p.canonical_name, il.original_name)
+                 order by coalesce(sum(${itemLineRevenue}), 0) desc, coalesce(sum(il.quantity), 0) desc, label`,
+                params
+              )
+            : db.query<AnalysisSegmentRow>(
+                `${documentsCte}
+                 select lpad(sale_hour::text, 2, '0') as segment_key,
+                        lpad(sale_hour::text, 2, '0') || ':00-' || lpad(sale_hour::text, 2, '0') || ':59' as label,
+                        null::text as color,
+                        coalesce(sum(revenue), 0)::text as revenue,
+                        count(id)::text as documents,
+                        coalesce(sum(ticket_count), 0)::text as tickets,
+                        coalesce(sum(item_units), 0)::text as item_units,
+                        count(distinct sale_date)::text as active_days
+                 from documents
+                 group by sale_hour
+                 order by sale_hour`,
+                params
+              ),
     db.query<{
       label: string;
       category: string;
@@ -1464,20 +1521,84 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
       revenue: string;
       tickets: string;
     }>(
-      `${documentsCte}
-       select coalesce(p.canonical_name, si.original_name) as label,
+      `${documentsCte}, item_lines as (
+         select si.quantity,
+                si.line_total::numeric as line_total,
+                si.original_name,
+                si.normalized_product_id,
+                d.id as sales_document_id,
+                d.revenue::numeric as document_total,
+                coalesce(sum(si.line_total::numeric) over (partition by d.id), 0) as document_item_total
+         from documents d
+         join sale_items si on si.sales_document_id = d.id
+       )
+       select coalesce(p.canonical_name, il.original_name) as label,
               coalesce(c.name, 'Sin categoria') as category,
-              coalesce(sum(si.quantity), 0)::text as quantity,
-              coalesce(sum(si.line_total), 0)::text as revenue,
-              count(distinct d.id)::text as tickets
-       from documents d
-       join sale_items si on si.sales_document_id = d.id
-       left join products p on p.id = si.normalized_product_id
+              coalesce(sum(il.quantity), 0)::text as quantity,
+              coalesce(sum(${itemLineRevenue}), 0)::text as revenue,
+              count(distinct il.sales_document_id)::text as tickets
+       from item_lines il
+       left join products p on p.id = il.normalized_product_id
        left join categories c on c.id = p.category_id
-       group by coalesce(p.canonical_name, si.original_name), coalesce(c.name, 'Sin categoria')
-       order by coalesce(sum(si.line_total), 0) desc, coalesce(sum(si.quantity), 0) desc
-       limit 12`,
+       group by coalesce(p.canonical_name, il.original_name), coalesce(c.name, 'Sin categoria')
+       order by coalesce(sum(${itemLineRevenue}), 0) desc, coalesce(sum(il.quantity), 0) desc`,
       params
+    ),
+    db.query<{
+      label: string;
+      category: string;
+      last_sale_date: string | null;
+    }>(
+      `${documentsCte}, sold_products as (
+         select distinct si.normalized_product_id
+         from documents d
+         join sale_items si on si.sales_document_id = d.id
+         where si.normalized_product_id is not null
+       )
+       select p.canonical_name as label,
+              coalesce(c.name, 'Sin categoria') as category,
+              (
+                select max(sd.sale_date)::text
+                from sale_items si
+                join sales_documents sd on sd.id = si.sales_document_id
+                join branches b on b.id = sd.branch_id
+                where si.normalized_product_id = p.id
+                  and b.organization_id = $1
+                  and sd.status = 'active'
+              ) as last_sale_date
+       from products p
+       left join categories c on c.id = p.category_id
+       where p.organization_id = $1
+         and p.active = true
+         and not exists (
+           select 1
+           from sold_products sp
+           where sp.normalized_product_id = p.id
+         )
+       order by p.canonical_name`,
+      params
+    ),
+    db.query<{
+      label: string;
+      category: string;
+      quantity: string;
+      total_cost: string;
+      records: string;
+    }>(
+      `select coalesce(p.canonical_name, wr.raw_data->>'productName', 'Producto sin nombre') as label,
+              coalesce(c.name, 'Sin categoria') as category,
+              coalesce(sum(wr.quantity), 0)::text as quantity,
+              coalesce(sum(wr.total_cost), 0)::text as total_cost,
+              count(wr.id)::text as records
+       from waste_records wr
+       join branches b on b.id = wr.branch_id
+       left join products p on p.id = wr.product_id
+       left join categories c on c.id = p.category_id
+       where ${wasteWhere}
+       group by coalesce(p.canonical_name, wr.raw_data->>'productName', 'Producto sin nombre'), coalesce(c.name, 'Sin categoria')
+       order by coalesce(sum(wr.total_cost), 0) desc, coalesce(sum(wr.quantity), 0) desc, label
+       limit 5`,
+      wasteParams
     ),
     db.query<{
       id: string;
@@ -1500,8 +1621,18 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
     const revenue = toNumber(row.revenue);
     const tickets = toNumber(row.tickets);
     const itemUnits = toNumber(row.item_units);
-    const label = report === "weekday" ? weekdayLabel(toNumber(row.segment_key)) : row.label;
-    const shortLabel = report === "weekday" ? weekdayShortLabel(toNumber(row.segment_key)) : label;
+    const label =
+      report === "weekday"
+        ? weekdayLabel(toNumber(row.segment_key))
+        : report === "day"
+          ? analysisDateLabel(row.segment_key)
+          : row.label;
+    const shortLabel =
+      report === "weekday"
+        ? weekdayShortLabel(toNumber(row.segment_key))
+        : report === "day"
+          ? analysisDateShortLabel(row.segment_key)
+          : label;
     return {
       key: row.segment_key,
       label,
@@ -1524,7 +1655,8 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
     filters: {
       report,
       metric,
-      weekday,
+      weekday: weekdays?.length === 1 ? weekdays[0] : null,
+      weekdays,
       hourFrom: normalizedHourFrom,
       hourTo: normalizedHourTo,
       employeeId
@@ -1551,6 +1683,18 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
       quantity: toNumber(row.quantity),
       revenue: toNumber(row.revenue),
       tickets: toNumber(row.tickets)
+    })),
+    noSaleProducts: noSaleProducts.rows.map((row) => ({
+      label: row.label,
+      category: row.category,
+      lastSaleDate: row.last_sale_date
+    })),
+    topWasteProducts: topWasteProducts.rows.map((row) => ({
+      label: row.label,
+      category: row.category,
+      quantity: toNumber(row.quantity),
+      totalCost: toNumber(row.total_cost),
+      records: toNumber(row.records)
     })),
     employees: employees.rows
   });
@@ -2186,7 +2330,9 @@ function metricValue(row: { revenue: number; tickets: number; itemUnits: number 
 
 function readAnalysisReport(req: express.Request): AnalysisReport {
   const value = typeof req.query.report === "string" ? req.query.report : "";
-  return value === "employee" || value === "weekday" || value === "hour" ? value : "hour";
+  return value === "employee" || value === "product" || value === "day" || value === "weekday" || value === "hour"
+    ? value
+    : "hour";
 }
 
 function readAnalysisMetric(req: express.Request): AnalysisMetric {
@@ -2202,10 +2348,20 @@ function readAnalysisDateRange(req: express.Request, today: string) {
   return from <= to ? { from, to } : { from: to, to: from };
 }
 
-function readAnalysisWeekday(req: express.Request) {
-  if (req.query.weekday === undefined || req.query.weekday === "all") return null;
-  const value = Number(req.query.weekday);
-  return Number.isInteger(value) && value >= 0 && value <= 6 ? value : null;
+function readAnalysisWeekdays(req: express.Request) {
+  const raw =
+    typeof req.query.weekdays === "string"
+      ? req.query.weekdays
+      : typeof req.query.weekday === "string"
+        ? req.query.weekday
+        : "";
+  if (!raw || raw === "all") return null;
+  const values = raw
+    .split(",")
+    .map((item) => Number(item.trim()))
+    .filter((value) => Number.isInteger(value) && value >= 0 && value <= 6);
+  const uniqueValues = [...new Set(values)];
+  return uniqueValues.length === 0 || uniqueValues.length === 7 ? null : uniqueValues;
 }
 
 function readAnalysisHour(value: unknown, fallback: number) {
@@ -2216,6 +2372,23 @@ function readAnalysisHour(value: unknown, fallback: number) {
 
 function isIsoDate(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function analysisDateLabel(value: string) {
+  if (!isIsoDate(value)) return value;
+  const date = parseIsoDate(value);
+  return `${weekdayLabel(date.getDay())} ${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}/${date.getFullYear()}`;
+}
+
+function analysisDateShortLabel(value: string) {
+  if (!isIsoDate(value)) return value;
+  const date = parseIsoDate(value);
+  return `${weekdayShortLabel(date.getDay())} ${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function parseIsoDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 function todayArgentinaDate() {

@@ -24,6 +24,9 @@ type BarRow = {
 };
 
 type TableRow = Array<string | number>;
+type TableOptions = {
+  maxRows?: number | "all";
+};
 
 const page = {
   width: 210,
@@ -165,7 +168,7 @@ export async function downloadProductsPdf(data: ProductPerformance, periodLabel:
   report.table(
     "Estado por producto",
     ["Producto", "Venta", "Unid.", "Tickets", "Merma %", "Neto", "Senal"],
-    data.products.slice(0, 30).map((row) => [
+    data.products.map((row) => [
       row.label,
       formatCurrency(row.revenue),
       formatNumber(row.quantitySold),
@@ -173,7 +176,8 @@ export async function downloadProductsPdf(data: ProductPerformance, periodLabel:
       formatPercent(row.wasteRate),
       formatCurrency(row.netAfterWaste),
       row.signal
-    ])
+    ]),
+    { maxRows: "all" }
   );
   report.save(`productos-${filenamePeriod(periodLabel)}.pdf`);
 }
@@ -205,16 +209,60 @@ export async function downloadAnalysisPdf(data: AnalysisDashboard, periodLabel: 
     })),
     formatCurrency
   );
+  report.bars(
+    "Top 5 productos con mas merma",
+    (data.topWasteProducts ?? []).map((row) => ({
+      label: row.label,
+      value: row.totalCost,
+      detail: `${formatNumber(row.quantity)} un. - ${row.category}`
+    })),
+    formatCurrency
+  );
   report.table(
     "Detalle por segmento",
     ["Segmento", "Venta", "Pedidos", "Unid.", "Ticket prom."],
-    data.segments.slice(0, 32).map((row) => [
+    data.segments.map((row) => [
       row.label,
       formatCurrency(row.revenue),
       formatInteger(row.tickets),
       formatNumber(row.itemUnits),
       formatCurrency(row.averageTicket)
-    ])
+    ]),
+    { maxRows: "all" }
+  );
+  report.table(
+    "Productos vendidos - listado completo",
+    ["Producto", "Categoria", "Unidades", "Venta", "Tickets"],
+    data.topProducts.map((row) => [
+      row.label,
+      row.category,
+      formatNumber(row.quantity),
+      formatCurrency(row.revenue),
+      formatInteger(row.tickets)
+    ]),
+    { maxRows: "all" }
+  );
+  report.table(
+    "Top 5 productos con mas merma",
+    ["Producto", "Categoria", "Unidades", "Merma", "Registros"],
+    (data.topWasteProducts ?? []).map((row) => [
+      row.label,
+      row.category,
+      formatNumber(row.quantity),
+      formatCurrency(row.totalCost),
+      formatInteger(row.records)
+    ]),
+    { maxRows: "all" }
+  );
+  report.table(
+    "Productos sin venta - listado completo",
+    ["Producto", "Categoria", "Ultima venta"],
+    (data.noSaleProducts ?? []).map((row) => [
+      row.label,
+      row.category,
+      row.lastSaleDate ? shortDate(row.lastSaleDate) : "Sin venta previa"
+    ]),
+    { maxRows: "all" }
   );
   report.save(`analisis-${filenamePeriod(periodLabel)}.pdf`);
 }
@@ -375,8 +423,9 @@ function createReport(title: string, periodLabel: string, subtitle: string) {
       });
       y += 4;
     },
-    table(titleText: string, headers: string[], rows: TableRow[]) {
-      const visible = rows.slice(0, 42);
+    table(titleText: string, headers: string[], rows: TableRow[], options: TableOptions = {}) {
+      const maxRows = options.maxRows ?? 42;
+      const visible = maxRows === "all" ? rows : rows.slice(0, maxRows);
       ensureSpace(Math.min(visible.length, 18) * 7 + 22);
       sectionTitle(doc, titleText, y);
       y += 8;

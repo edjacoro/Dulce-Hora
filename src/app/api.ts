@@ -313,9 +313,10 @@ export type AnalysisDashboard = {
     to: string;
   };
   filters: {
-    report: "hour" | "employee" | "weekday";
+    report: "hour" | "day" | "weekday" | "product" | "employee";
     metric: "revenue" | "tickets" | "items";
     weekday: number | null;
+    weekdays: number[] | null;
     hourFrom: number;
     hourTo: number;
     employeeId: string | null;
@@ -350,6 +351,18 @@ export type AnalysisDashboard = {
     quantity: number;
     revenue: number;
     tickets: number;
+  }>;
+  noSaleProducts: Array<{
+    label: string;
+    category: string;
+    lastSaleDate: string | null;
+  }>;
+  topWasteProducts: Array<{
+    label: string;
+    category: string;
+    quantity: number;
+    totalCost: number;
+    records: number;
   }>;
   employees: Array<{
     id: string;

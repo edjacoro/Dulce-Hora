@@ -3,7 +3,9 @@ import {
   BarChart3,
   CalendarDays,
   Download,
+  FileSpreadsheet,
   PackageSearch,
+  PackageX,
   ReceiptText,
   Users,
   WalletCards
@@ -17,7 +19,6 @@ type AnalysisReport = AnalysisDashboard["filters"]["report"];
 type AnalysisMetric = AnalysisDashboard["filters"]["metric"];
 
 const weekdayOptions = [
-  { value: "all", label: "Todos" },
   { value: "0", label: "Domingo" },
   { value: "1", label: "Lunes" },
   { value: "2", label: "Martes" },
@@ -32,10 +33,11 @@ export function AnalysisPage() {
   const [metric, setMetric] = useState<AnalysisMetric>("revenue");
   const [from, setFrom] = useState(() => monthStart(today()));
   const [to, setTo] = useState(() => today());
-  const [weekday, setWeekday] = useState("all");
+  const [weekdays, setWeekdays] = useState<string[]>([]);
   const [hourFrom, setHourFrom] = useState(7);
   const [hourTo, setHourTo] = useState(20);
   const [employeeId, setEmployeeId] = useState("all");
+  const weekdayParam = weekdays.length === 0 ? "all" : weekdays.join(",");
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
@@ -43,16 +45,16 @@ export function AnalysisPage() {
       metric,
       from,
       to,
-      weekday,
+      weekdays: weekdayParam,
       hourFrom: String(hourFrom),
       hourTo: String(hourTo),
       employeeId
     });
     return `?${params.toString()}`;
-  }, [employeeId, from, hourFrom, hourTo, metric, report, to, weekday]);
+  }, [employeeId, from, hourFrom, hourTo, metric, report, to, weekdayParam]);
 
   const analysis = useQuery({
-    queryKey: ["analysis-sales", report, metric, from, to, weekday, hourFrom, hourTo, employeeId],
+    queryKey: ["analysis-sales", report, metric, from, to, weekdayParam, hourFrom, hourTo, employeeId],
     queryFn: () => api<AnalysisDashboard>(`/api/analysis/sales${query}`)
   });
 
@@ -60,6 +62,7 @@ export function AnalysisPage() {
   const maxValue = Math.max(1, ...(data?.segments ?? []).map((row) => metricValue(row, metric)));
   const topSegments = (data?.segments ?? []).slice(0, 12);
   const activePeriodLabel = periodLabel(from, to);
+  const filterLabel = `${activePeriodLabel} - ${weekdaysLabel(weekdays)} - ${String(hourFrom).padStart(2, "0")}:00 a ${String(hourTo).padStart(2, "0")}:59 - ${data ? employeeName(data, employeeId) : "Todos"}`;
 
   return (
     <section className="page-section analysis-page">
@@ -68,17 +71,30 @@ export function AnalysisPage() {
           <h1>Analisis</h1>
           <p>Ventas cruzadas por horario, empleado, dia de semana, productos y cobertura.</p>
         </div>
-        <button
-          className="secondary-button"
-          disabled={!data}
-          onClick={() => {
-            if (data) void downloadAnalysisPdf(data, activePeriodLabel);
-          }}
-          type="button"
-        >
-          <Download size={18} aria-hidden="true" />
-          PDF
-        </button>
+        <div className="heading-actions">
+          <button
+            className="secondary-button"
+            disabled={!data}
+            onClick={() => {
+              if (data) downloadAnalysisCsv(data, activePeriodLabel);
+            }}
+            type="button"
+          >
+            <FileSpreadsheet size={18} aria-hidden="true" />
+            CSV
+          </button>
+          <button
+            className="secondary-button"
+            disabled={!data}
+            onClick={() => {
+              if (data) void downloadAnalysisPdf(data, activePeriodLabel);
+            }}
+            type="button"
+          >
+            <Download size={18} aria-hidden="true" />
+            PDF
+          </button>
+        </div>
       </div>
 
       <section className="content-band">
@@ -86,8 +102,10 @@ export function AnalysisPage() {
           <Field label="Informe">
             <select value={report} onChange={(event) => setReport(event.target.value as AnalysisReport)}>
               <option value="hour">Por horario</option>
-              <option value="employee">Por empleado</option>
+              <option value="day">Por dia</option>
               <option value="weekday">Por dia de semana</option>
+              <option value="product">Por producto</option>
+              <option value="employee">Por empleado</option>
             </select>
           </Field>
           <Field label="Desde">
@@ -96,15 +114,30 @@ export function AnalysisPage() {
           <Field label="Hasta">
             <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
           </Field>
-          <Field label="Dia">
-            <select value={weekday} onChange={(event) => setWeekday(event.target.value)}>
+          <div className="field weekday-picker">
+            <span>Dia</span>
+            <div className="weekday-toggle-grid">
+              <button
+                className={`weekday-toggle ${weekdays.length === 0 ? "active" : ""}`}
+                onClick={() => setWeekdays([])}
+                type="button"
+              >
+                <span className="fake-check" aria-hidden="true" />
+                Todos
+              </button>
               {weekdayOptions.map((option) => (
-                <option key={option.value} value={option.value}>
+                <button
+                  className={`weekday-toggle ${weekdays.includes(option.value) ? "active" : ""}`}
+                  key={option.value}
+                  onClick={() => setWeekdays((current) => toggleWeekday(current, option.value))}
+                  type="button"
+                >
+                  <span className="fake-check" aria-hidden="true" />
                   {option.label}
-                </option>
+                </button>
               ))}
-            </select>
-          </Field>
+            </div>
+          </div>
           <Field label="Hora desde">
             <input
               min={0}
@@ -142,6 +175,8 @@ export function AnalysisPage() {
           </Field>
         </div>
       </section>
+
+      <p className="analysis-filter-summary">{filterLabel}</p>
 
       {analysis.isLoading ? (
         <section className="content-band">
@@ -223,6 +258,54 @@ export function AnalysisPage() {
 
             <section className="content-band">
               <div className="table-heading">
+                <h2>
+                  <PackageX size={18} aria-hidden="true" />
+                  Productos sin venta
+                </h2>
+                <span className="period-chip">catalogo activo</span>
+              </div>
+              <div className="analysis-product-list">
+                {(data.noSaleProducts ?? []).length === 0 ? (
+                  <p className="muted-text">Todos los productos activos tuvieron venta en este filtro.</p>
+                ) : (
+                  data.noSaleProducts.slice(0, 10).map((product) => (
+                    <div className="analysis-product-row muted-product-row" key={`${product.label}-${product.category}`}>
+                      <div>
+                        <strong>{product.label}</strong>
+                        <span>{product.category}</span>
+                      </div>
+                      <span>{product.lastSaleDate ? `Ult. ${shortDate(product.lastSaleDate)}` : "Sin venta previa"}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section className="content-band">
+              <div className="table-heading">
+                <h2>Top mermas</h2>
+                <span className="period-chip">top 5</span>
+              </div>
+              <div className="analysis-product-list">
+                {(data.topWasteProducts ?? []).length === 0 ? (
+                  <p className="muted-text">Sin mermas de productos para este filtro.</p>
+                ) : (
+                  data.topWasteProducts.map((product) => (
+                    <div className="analysis-product-row" key={`${product.label}-${product.category}-waste`}>
+                      <div>
+                        <strong>{product.label}</strong>
+                        <span>{product.category}</span>
+                      </div>
+                      <strong>{formatCurrency(product.totalCost)}</strong>
+                      <span>{formatNumber(product.quantity)} un.</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section className="content-band">
+              <div className="table-heading">
                 <h2>Lectura rapida</h2>
                 <span className="period-chip">{metricLabel(metric)}</span>
               </div>
@@ -236,7 +319,7 @@ export function AnalysisPage() {
                 <Callout
                   icon={CalendarDays}
                   label="Filtro dia"
-                  value={weekdayName(weekday)}
+                  value={weekdaysLabel(weekdays)}
                   detail={`${String(data.filters.hourFrom).padStart(2, "0")}:00 a ${String(data.filters.hourTo).padStart(2, "0")}:59`}
                 />
               </div>
@@ -335,6 +418,68 @@ function Callout({
   );
 }
 
+function toggleWeekday(current: string[], value: string) {
+  const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+  if (next.length === 0 || next.length === weekdayOptions.length) return [];
+  return next.sort((a, b) => Number(a) - Number(b));
+}
+
+function weekdaysLabel(values: string[]) {
+  if (values.length === 0) return "Todos los dias";
+  return values.map((value) => weekdayOptions.find((option) => option.value === value)?.label ?? value).join(", ");
+}
+
+function downloadAnalysisCsv(data: AnalysisDashboard, periodLabel: string) {
+  const rows = [
+    ["Segmento", "Venta", "Pedidos", "Unidades", "Ticket prom.", "Unid./ticket", "Participacion"],
+    ...data.segments.map((row) => [
+      row.label,
+      row.revenue,
+      row.tickets,
+      row.itemUnits,
+      Math.round(row.averageTicket * 100) / 100,
+      Math.round(row.unitsPerTicket * 100) / 100,
+      Math.round(row.share * 10) / 10
+    ]),
+    [],
+    ["Productos destacados"],
+    ["Producto", "Categoria", "Unidades", "Venta", "Tickets"],
+    ...data.topProducts.map((row) => [row.label, row.category, row.quantity, row.revenue, row.tickets]),
+    [],
+    ["Top 5 productos con mas merma"],
+    ["Producto", "Categoria", "Unidades", "Merma", "Registros"],
+    ...(data.topWasteProducts ?? []).map((row) => [row.label, row.category, row.quantity, row.totalCost, row.records]),
+    [],
+    ["Productos sin venta"],
+    ["Producto", "Categoria", "Ultima venta"],
+    ...(data.noSaleProducts ?? []).map((row) => [row.label, row.category, row.lastSaleDate ?? ""])
+  ];
+  const csv = rows.map((row) => row.map(csvCell).join(";")).join("\r\n");
+  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `analisis-${filenamePeriod(periodLabel)}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function csvCell(value: unknown) {
+  const text = String(value ?? "");
+  return /[;"\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function filenamePeriod(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 function metricValue(row: AnalysisDashboard["segments"][number], metric: AnalysisMetric) {
   if (metric === "tickets") return row.tickets;
   if (metric === "items") return row.itemUnits;
@@ -349,6 +494,8 @@ function formatMetric(value: number, metric: AnalysisMetric) {
 
 function reportTitle(report: AnalysisReport) {
   if (report === "employee") return "Venta por empleado";
+  if (report === "product") return "Venta por producto";
+  if (report === "day") return "Venta por dia";
   if (report === "weekday") return "Venta por dia de semana";
   return "Venta por segmento horario";
 }
