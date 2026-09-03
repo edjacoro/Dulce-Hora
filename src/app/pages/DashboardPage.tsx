@@ -3,17 +3,16 @@ import {
   ArrowRight,
   BadgeDollarSign,
   BarChart3,
-  CalendarDays,
+  Clock3,
   Database,
   FileSpreadsheet,
-  ReceiptText,
   Store,
   Trash2,
+  TrendingUp,
   Users
 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { api, type DashboardOverview, type MeResponse, type SalesSummary } from "../api";
-import { dulceHoraLogo } from "../brand";
+import { api, type DashboardOverview, type FinanceDashboard, type MeResponse, type SalesSummary } from "../api";
 
 export function DashboardPage() {
   const me = useQuery({
@@ -25,56 +24,49 @@ export function DashboardPage() {
     queryFn: () => api<DashboardOverview>("/api/dashboard/overview")
   });
   const day = today();
-  const monthFrom = monthStart(day);
+  const month = day.slice(0, 7);
   const todaySales = useQuery({
     queryKey: ["sales-summary", day, day],
     queryFn: () => api<SalesSummary>(`/api/sales/summary?from=${day}&to=${day}`)
   });
-  const monthSales = useQuery({
-    queryKey: ["sales-summary", monthFrom, day],
-    queryFn: () => api<SalesSummary>(`/api/sales/summary?from=${monthFrom}&to=${day}`)
+  const finance = useQuery({
+    queryKey: ["finance-dashboard", month, day],
+    queryFn: () => api<FinanceDashboard>(`/api/finance/dashboard?month=${month}&date=${day}`)
   });
 
   const counts = overview.data?.counts;
   const user = me.data?.user;
   const branchName = branchDisplayName(me.data?.branches[0]?.name);
   const daySummary = todaySales.data?.summary;
-  const monthSummary = monthSales.data?.summary;
+  const ticketsPerHour = ticketsPerOperatingHour(day, daySummary?.tickets ?? 0);
+  const projection = finance.data?.summary.projection ?? 0;
 
   return (
     <section className="page-section dashboard-page">
       <div className="dashboard-hero">
         <div className="dashboard-hero-copy">
-          <span className="eyebrow">Dulce Hora Control</span>
+          <span className="eyebrow">Panel operativo</span>
           <h1>{user ? `Hola, ${user.name}` : "Inicio"}</h1>
-          <p>{overview.data?.dataStatus ?? "Datos operativos conectados"}</p>
+          <p>{longDate(day)} - {overview.data?.dataStatus ?? "Datos operativos conectados"}</p>
+        </div>
+        <div className="dashboard-branch-panel">
+          <span>Sucursal activa</span>
           <div className="branch-selector">
             <label>
-              Sucursal
               <select value="juramento" onChange={() => undefined}>
                 <option value="juramento">{branchName}</option>
               </select>
             </label>
           </div>
-        </div>
-        <div className="dashboard-logo-panel">
-          <img src={dulceHoraLogo} alt="" />
-          <strong>JURAMENTO</strong>
-          <span>Villa Urquiza</span>
+          <small>ARS - Base online</small>
         </div>
       </div>
 
-      <div className="kpi-grid">
+      <div className="kpi-grid dashboard-priority-grid">
         <Kpi icon={BadgeDollarSign} label="Venta hoy" value={formatCurrency(daySummary?.netSales ?? 0)} tone="red" />
-        <Kpi icon={ReceiptText} label="Tickets hoy" value={daySummary?.tickets ?? 0} tone="blue" />
+        <Kpi icon={Clock3} label="Tickets por hora" value={formatNumber(ticketsPerHour)} tone="blue" />
         <Kpi icon={BarChart3} label="Ticket promedio" value={formatCurrency(daySummary?.averageTicket ?? 0)} tone="green" />
-        <Kpi icon={CalendarDays} label="Venta mes" value={formatCurrency(monthSummary?.netSales ?? 0)} tone="amber" />
-        <Kpi
-          icon={Database}
-          label="Detalle productos"
-          value={`${Math.round((daySummary?.itemDetailCoverage ?? 1) * 100)}%`}
-          tone="slate"
-        />
+        <Kpi icon={TrendingUp} label="Proyeccion mes" value={formatCurrency(projection)} tone="amber" />
       </div>
 
       <div className="dashboard-action-grid">
@@ -167,8 +159,48 @@ function today() {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-function monthStart(value: string) {
-  return `${value.slice(0, 7)}-01`;
+function longDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Intl.DateTimeFormat("es-AR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  }).format(new Date(year, month - 1, day));
+}
+
+function ticketsPerOperatingHour(value: string, tickets: number) {
+  const elapsed = operatingHoursElapsed(value);
+  return elapsed > 0 ? tickets / elapsed : 0;
+}
+
+function operatingHoursElapsed(value: string) {
+  const { open, close } = businessHoursForDate(value);
+  const todayValue = today();
+  if (value > todayValue) return 0;
+  if (value < todayValue) return Math.max(0, (close - open) / 60);
+
+  const now = currentArgentinaMinutes();
+  const current = Math.min(close, Math.max(open, now));
+  return Math.max(0, (current - open) / 60);
+}
+
+function businessHoursForDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.getDay() === 0 ? { open: 8 * 60, close: 19 * 60 } : { open: 7 * 60 + 30, close: 19 * 60 + 30 };
+}
+
+function currentArgentinaMinutes() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  return (hour % 24) * 60 + minute;
 }
 
 function formatCurrency(value: number) {
@@ -177,4 +209,8 @@ function formatCurrency(value: number) {
     currency: "ARS",
     maximumFractionDigits: 0
   }).format(value);
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("es-AR", { maximumFractionDigits: 2 }).format(value);
 }

@@ -11,11 +11,13 @@ import {
   LineChart,
   LogOut,
   IdCard,
+  MoreHorizontal,
   Settings,
   ShieldCheck,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api, type DashboardOverview, type MeResponse, type ScheduleResponse, type SetupStatus } from "./api";
 import { dulceHoraLogo } from "./brand";
@@ -54,11 +56,15 @@ const navItems = [
   { to: "/ajustes", label: "Ajustes", icon: Settings }
 ];
 
+const mobilePrimaryNavItems = navItems.filter((item) => ["/", "/ventas", "/finanzas", "/grilla"].includes(item.to));
+const mobileMoreNavItems = navItems.filter((item) => !mobilePrimaryNavItems.some((primary) => primary.to === item.to));
+
 const EXPENSES_IMPORT_SESSION_KEY = "dulce-hora-auto-expenses-import-started-v2";
 
 export function App() {
   const queryClient = useQueryClient();
   const location = useLocation();
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const canRunDulceHoraTodaySync = canRunDulceHoraDateSyncFromThisHost(todayArgentina());
   const setup = useQuery({
     queryKey: ["setup-status"],
@@ -162,6 +168,10 @@ export function App() {
     };
   }, [canRunDulceHoraTodaySync, me.data, queryClient]);
 
+  useEffect(() => {
+    setMobileMoreOpen(false);
+  }, [location.pathname]);
+
   if (setup.isLoading) {
     return <Splash text="Preparando Dulce Hora Control" />;
   }
@@ -263,12 +273,98 @@ export function App() {
           </div>
         </DulceHoraImportJobProvider>
       </main>
+
+      {mobileMoreOpen ? (
+        <>
+          <button
+            aria-label="Cerrar menu mobile"
+            className="mobile-more-backdrop"
+            onClick={() => setMobileMoreOpen(false)}
+            type="button"
+          />
+          <section className="mobile-more-sheet" role="dialog" aria-label="Mas secciones">
+            <div className="mobile-more-header">
+              <div>
+                <strong>Mas secciones</strong>
+                <small>{branchDisplayName(me.data.branches[0]?.name)}</small>
+              </div>
+              <button className="icon-only-button" onClick={() => setMobileMoreOpen(false)} type="button" aria-label="Cerrar">
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="mobile-more-grid">
+              {mobileMoreNavItems.map((item) => (
+                <NavLink
+                  className={({ isActive }) =>
+                    `mobile-more-item ${isActive || isSalesSectionActive(item.to, location.pathname) ? "active" : ""}`
+                  }
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === "/"}
+                >
+                  <item.icon size={18} aria-hidden="true" />
+                  <span>{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
+            <div className="mobile-more-footer">
+              <div className="user-chip mobile-user-chip">
+                {me.data.user.avatar_url ? (
+                  <img className="user-avatar" src={me.data.user.avatar_url} alt="" />
+                ) : (
+                  <ShieldCheck size={18} aria-hidden="true" />
+                )}
+                <span>
+                  <strong>{me.data.user.name}</strong>
+                  <small>{roleLabel(me.data.user.role)}</small>
+                </span>
+              </div>
+              <button className="icon-text-button" onClick={() => logout.mutate()} type="button">
+                <LogOut size={18} aria-hidden="true" />
+                Salir
+              </button>
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      <nav className="mobile-bottom-nav" aria-label="Navegacion mobile">
+        {mobilePrimaryNavItems.map((item) => (
+          <NavLink
+            className={() => `mobile-bottom-item ${isMobileNavActive(item.to, location.pathname) ? "active" : ""}`}
+            key={item.to}
+            to={item.to}
+            end={item.to === "/"}
+          >
+            <item.icon size={19} aria-hidden="true" />
+            <span>{item.label}</span>
+          </NavLink>
+        ))}
+        <button
+          className={`mobile-bottom-item ${mobileMoreOpen || isMobileMoreActive(location.pathname) ? "active" : ""}`}
+          onClick={() => setMobileMoreOpen((current) => !current)}
+          type="button"
+        >
+          <MoreHorizontal size={19} aria-hidden="true" />
+          <span>Mas</span>
+        </button>
+      </nav>
     </div>
   );
 }
 
 function isSalesSectionActive(itemPath: string, currentPath: string) {
   return itemPath === "/ventas" && ["/ventas", "/productos", "/horarios"].some((path) => currentPath.startsWith(path));
+}
+
+function isMobileNavActive(itemPath: string, currentPath: string) {
+  if (itemPath === "/") return currentPath === "/";
+  if (itemPath === "/ventas") return ["/ventas", "/productos", "/horarios"].some((path) => currentPath.startsWith(path));
+  return currentPath.startsWith(itemPath);
+}
+
+function isMobileMoreActive(currentPath: string) {
+  return !mobilePrimaryNavItems.some((item) => isMobileNavActive(item.to, currentPath));
 }
 
 function branchDisplayName(name: string | undefined) {
