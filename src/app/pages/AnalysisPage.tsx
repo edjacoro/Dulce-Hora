@@ -342,7 +342,7 @@ export function AnalysisPage() {
                     <th>Pedidos</th>
                     <th>Unidades</th>
                     <th>Ticket prom.</th>
-                    <th>Unid./ticket</th>
+                    <th>Art./ticket</th>
                     <th>Part.</th>
                   </tr>
                 </thead>
@@ -433,7 +433,7 @@ function weekdaysLabel(values: string[]) {
 
 function downloadAnalysisCsv(data: AnalysisDashboard, periodLabel: string) {
   const rows = [
-    ["Segmento", "Venta", "Pedidos", "Unidades", "Ticket prom.", "Unid./ticket", "Participacion"],
+    ["Segmento", "Venta", "Pedidos", "Unidades", "Ticket prom.", "Articulos/ticket", "Participacion"],
     ...data.segments.map((row) => [
       row.label,
       row.revenue,

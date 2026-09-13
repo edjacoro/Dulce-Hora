@@ -326,6 +326,7 @@ export type AnalysisDashboard = {
     documents: number;
     tickets: number;
     itemUnits: number;
+    itemLines: number;
     averageTicket: number;
     unitsPerTicket: number;
     activeDays: number;
@@ -339,6 +340,7 @@ export type AnalysisDashboard = {
     documents: number;
     tickets: number;
     itemUnits: number;
+    itemLines: number;
     averageTicket: number;
     unitsPerTicket: number;
     activeDays: number;

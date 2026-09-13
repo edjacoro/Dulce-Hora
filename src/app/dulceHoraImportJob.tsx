@@ -89,7 +89,7 @@ export function DulceHoraImportJobProvider({ children }: { children: ReactNode }
 
       const date = options.date;
       const maxRuns = options.maxRuns ?? 55;
-      const detailLimit = options.detailLimit ?? 3;
+      const detailLimit = options.detailLimit ?? 6;
       const includeWaste = options.includeWaste ?? false;
       const includeProductDetails = options.includeProductDetails ?? true;
 

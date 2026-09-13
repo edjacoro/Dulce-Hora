@@ -26,6 +26,12 @@ type DetailHydrationInput = SyncInput & {
   limit?: number;
 };
 
+type DetailBacklogInput = Omit<SyncInput, "date"> & {
+  dateFrom: string;
+  dateTo: string;
+  limit?: number;
+};
+
 type ParsedItem = {
   externalProductId: string;
   source: "product" | "custom";
@@ -258,6 +264,92 @@ export async function hydrateDulceHoraDateDetails(input: DetailHydrationInput): 
         result.warnings.push(`Quedan ${remaining} comprobantes sin detalle de productos; se completan en proximas sincronizaciones.`);
       }
     });
+
+    await finishRun(runId, "success", result);
+    await auditSync(input.organizationId, input.userId, runId, result);
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Error desconocido";
+    result.errors.push(message);
+    await finishRun(runId, "failed", result, message);
+    throw error;
+  }
+}
+
+export async function hydrateDulceHoraDetailBacklog(input: DetailBacklogInput): Promise<SyncResult> {
+  const credentials = getDulceHoraCredentials();
+  if (!credentials) {
+    throw new Error("Faltan DULCE_HORA_USERNAME y DULCE_HORA_PASSWORD en el entorno del backend");
+  }
+
+  const runId = randomUUID();
+  await db.query(
+    `insert into sync_runs (id, branch_id, integration, status)
+     values ($1, $2, 'dulce-hora-panel-details-backlog', 'running')`,
+    [runId, input.branchId]
+  );
+
+  const result: SyncResult = {
+    runId,
+    date: input.dateTo,
+    recordsReceived: 0,
+    recordsCreated: 0,
+    recordsUpdated: 0,
+    recordsRejected: 0,
+    itemRows: 0,
+    wasteRecordsReceived: 0,
+    wasteRecordsCreated: 0,
+    wasteRecordsUpdated: 0,
+    errors: [],
+    warnings: []
+  };
+
+  try {
+    const limit = readDetailHydrationLimit(input.limit);
+    const { entries, totalMissing } = await entriesNeedingDetailBacklogFromDatabase(
+      input.branchId,
+      input.dateFrom,
+      input.dateTo,
+      limit
+    );
+    result.recordsReceived = totalMissing;
+
+    if (entries.length > 0) {
+      await withDulceHoraSession(credentials, async (client) => {
+        const catalog = await catalogFromDatabase(input.organizationId);
+        let completedDetailRecords = 0;
+
+        for (const candidate of entries) {
+          try {
+            const document = await fetchDocumentWithRetry(client, candidate.entry);
+            const parsed = parseDocument(document, candidate.date, catalog);
+            const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
+            result.recordsCreated += upsert.created ? 1 : 0;
+            result.recordsUpdated += upsert.created ? 0 : 1;
+            result.itemRows += parsed.items.length;
+            completedDetailRecords += 1;
+          } catch (error) {
+            if (error instanceof DulceHoraAuthenticationError) throw error;
+            if (error instanceof DulceHoraRateLimitError) {
+              result.warnings.push("Dulce Hora limito temporalmente la lectura de detalles; se continua en la proxima pasada.");
+              break;
+            }
+            result.recordsRejected += 1;
+            result.errors.push(error instanceof Error ? error.message : "Error desconocido");
+          }
+        }
+
+        result.detailRecordsRemaining = Math.max(0, totalMissing - completedDetailRecords);
+      });
+    } else {
+      result.detailRecordsRemaining = totalMissing;
+    }
+
+    if ((result.detailRecordsRemaining ?? 0) > 0) {
+      result.warnings.push(
+        `Quedan ${result.detailRecordsRemaining} comprobantes sin detalle de productos; se completan automaticamente en proximas pasadas.`
+      );
+    }
 
     await finishRun(runId, "success", result);
     await auditSync(input.organizationId, input.userId, runId, result);
@@ -759,6 +851,54 @@ async function entriesNeedingDetailFromDatabase(
         displayType: row.external_id.slice(0, separator),
         externalId: row.external_id.slice(separator + 1),
         cells: []
+      };
+    })
+  };
+}
+
+async function entriesNeedingDetailBacklogFromDatabase(
+  branchId: string,
+  dateFrom: string,
+  dateTo: string,
+  limit: number
+): Promise<{
+  totalMissing: number;
+  entries: Array<{ date: string; entry: RegistryEntry }>;
+}> {
+  if (limit <= 0) return { totalMissing: 0, entries: [] };
+
+  const rows = await db.query<{ sale_date: string; external_id: string; total_missing: string }>(
+    `select sd.sale_date::text as sale_date,
+            sd.external_id,
+            count(*) over()::text as total_missing
+     from sales_documents sd
+     where sd.branch_id = $1
+       and sd.sale_date >= $2
+       and sd.sale_date <= $3
+       and sd.source = 'dulce-hora-panel'
+       and sd.external_id is not null
+       and sd.external_id ~ '^[A-Z]:'
+       and not exists (
+         select 1
+         from sale_items si
+         where si.sales_document_id = sd.id
+       )
+     order by sd.sale_date desc, sd.sale_time nulls last, sd.imported_at, sd.external_id
+     limit $4`,
+    [branchId, dateFrom, dateTo, limit]
+  );
+
+  return {
+    totalMissing: Number(rows.rows[0]?.total_missing ?? 0),
+    entries: rows.rows.map((row) => {
+      const separator = row.external_id.indexOf(":");
+      return {
+        date: row.sale_date,
+        entry: {
+          displayType: row.external_id.slice(0, separator),
+          externalId: row.external_id.slice(separator + 1),
+          cells: []
+        }
       };
     })
   };

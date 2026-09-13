@@ -1,6 +1,6 @@
 import type { Config, Handler } from "@netlify/functions";
-import { db, migrate, queryOne } from "../../server/db.js";
-import { getDefaultBranch, hydrateDulceHoraDateDetails, syncDulceHoraDate } from "../../server/dulceHoraSync.js";
+import { migrate, queryOne } from "../../server/db.js";
+import { getDefaultBranch, hydrateDulceHoraDetailBacklog, syncDulceHoraDate } from "../../server/dulceHoraSync.js";
 
 process.env.DULCE_HORA_SERVERLESS = "true";
 process.env.NETLIFY = process.env.NETLIFY ?? "true";
@@ -62,27 +62,16 @@ export const handler: Handler = async () => {
       includeWaste: false,
       includeStatistics: false
     });
-    const detailLimit = Number(process.env.DULCE_HORA_SCHEDULED_DETAIL_LIMIT ?? 3);
-    const detailBatches = Number(process.env.DULCE_HORA_SCHEDULED_DETAIL_BATCHES ?? 5);
-    let detailItemRows = 0;
-    let detailRecordsUpdated = 0;
-    let detailRecordsRemaining: number | null = null;
-    const detailWarnings: string[] = [];
-
-    for (let batch = 0; batch < detailBatches; batch += 1) {
-      const detailResult = await hydrateDulceHoraDateDetails({
-        branchId: branch.id,
-        organizationId: organization.id,
-        userId: user.id,
-        date,
-        limit: detailLimit
-      });
-      detailItemRows += detailResult.itemRows;
-      detailRecordsUpdated += detailResult.recordsUpdated;
-      detailRecordsRemaining = detailResult.detailRecordsRemaining ?? null;
-      detailWarnings.push(...(detailResult.warnings ?? []));
-      if (detailRecordsRemaining === 0 || (detailResult.recordsUpdated === 0 && detailResult.itemRows === 0)) break;
-    }
+    const detailLimit = positiveInteger(process.env.DULCE_HORA_SCHEDULED_DETAIL_LIMIT, 8);
+    const detailWindowDays = positiveInteger(process.env.DULCE_HORA_SCHEDULED_DETAIL_WINDOW_DAYS, 7);
+    const detailResult = await hydrateDulceHoraDetailBacklog({
+      branchId: branch.id,
+      organizationId: organization.id,
+      userId: user.id,
+      dateFrom: shiftDate(date, -(detailWindowDays - 1)),
+      dateTo: date,
+      limit: detailLimit
+    });
 
     return json(200, {
       ok: true,
@@ -90,10 +79,10 @@ export const handler: Handler = async () => {
       recordsReceived: result.recordsReceived,
       recordsCreated: result.recordsCreated,
       recordsUpdated: result.recordsUpdated,
-      itemRows: detailItemRows,
-      detailRecordsUpdated,
-      detailRecordsRemaining,
-      detailWarnings
+      itemRows: detailResult.itemRows,
+      detailRecordsUpdated: detailResult.recordsUpdated,
+      detailRecordsRemaining: detailResult.detailRecordsRemaining ?? null,
+      detailWarnings: detailResult.warnings
     });
   } catch (error) {
     console.error("[scheduled-sync-today]", error);
@@ -121,4 +110,16 @@ function todayArgentina() {
   }).formatToParts(new Date());
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function positiveInteger(value: string | undefined, fallback: number) {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function shiftDate(value: string, days: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }

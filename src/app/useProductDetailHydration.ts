@@ -49,7 +49,7 @@ export function useProductDetailHydration({
     void hydrateDulceHoraDetailsUntilDone({
       date,
       queryClient,
-      limit: 3,
+      limit: 6,
       maxRuns: 36,
       pauseMs: 650,
       onProgress: (progress) => {

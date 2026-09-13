@@ -161,6 +161,7 @@ type AnalysisSegmentRow = {
   documents: string;
   tickets: string;
   item_units: string;
+  item_lines: string;
   active_days: string;
 };
 
@@ -1378,11 +1379,16 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
            extract(hour from sd.sale_time)::int as sale_hour,
            ${netTotal} as revenue,
            case when sd.status = 'active' then 1 else 0 end as ticket_count,
-           coalesce((
+           case when sd.status = 'active' then coalesce((
              select sum(si.quantity)
              from sale_items si
              where si.sales_document_id = sd.id
-           ), 0) as item_units
+           ), 0) else 0 end as item_units,
+           case when sd.status = 'active' then coalesce((
+             select count(si.id)
+             from sale_items si
+             where si.sales_document_id = sd.id
+           ), 0) else 0 end as item_lines
     from sales_documents sd
     join branches b on b.id = sd.branch_id
     where ${where}
@@ -1399,6 +1405,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
       documents: string;
       tickets: string;
       item_units: string;
+      item_lines: string;
       active_days: string;
     }>(
       `${documentsCte}
@@ -1406,6 +1413,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
               count(id)::text as documents,
               coalesce(sum(ticket_count), 0)::text as tickets,
               coalesce(sum(item_units), 0)::text as item_units,
+              coalesce(sum(item_lines), 0)::text as item_lines,
               count(distinct sale_date)::text as active_days
        from documents`,
       params
@@ -1420,6 +1428,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
                   count(distinct d.id)::text as documents,
                   coalesce(sum(d.ticket_count), 0)::text as tickets,
                   coalesce(sum(d.item_units), 0)::text as item_units,
+                  coalesce(sum(d.item_lines), 0)::text as item_lines,
                   count(distinct d.sale_date)::text as active_days
            from documents d
            left join staff_shifts ss
@@ -1448,6 +1457,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
                     count(id)::text as documents,
                     coalesce(sum(ticket_count), 0)::text as tickets,
                     coalesce(sum(item_units), 0)::text as item_units,
+                    coalesce(sum(item_lines), 0)::text as item_lines,
                     count(distinct sale_date)::text as active_days
              from documents
              group by weekday
@@ -1464,6 +1474,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
                       count(id)::text as documents,
                       coalesce(sum(ticket_count), 0)::text as tickets,
                       coalesce(sum(item_units), 0)::text as item_units,
+                      coalesce(sum(item_lines), 0)::text as item_lines,
                       1::text as active_days
                from documents
                group by sale_date
@@ -1492,6 +1503,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
                         count(distinct il.sales_document_id)::text as documents,
                         count(distinct case when il.ticket_count = 1 then il.sales_document_id end)::text as tickets,
                         coalesce(sum(il.quantity), 0)::text as item_units,
+                        count(*)::text as item_lines,
                         count(distinct il.sale_date)::text as active_days
                  from item_lines il
                  left join products p on p.id = il.normalized_product_id
@@ -1505,10 +1517,11 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
                         lpad(sale_hour::text, 2, '0') || ':00-' || lpad(sale_hour::text, 2, '0') || ':59' as label,
                         null::text as color,
                         coalesce(sum(revenue), 0)::text as revenue,
-                        count(id)::text as documents,
-                        coalesce(sum(ticket_count), 0)::text as tickets,
-                        coalesce(sum(item_units), 0)::text as item_units,
-                        count(distinct sale_date)::text as active_days
+                         count(id)::text as documents,
+                         coalesce(sum(ticket_count), 0)::text as tickets,
+                         coalesce(sum(item_units), 0)::text as item_units,
+                         coalesce(sum(item_lines), 0)::text as item_lines,
+                         count(distinct sale_date)::text as active_days
                  from documents
                  group by sale_hour
                  order by sale_hour`,
@@ -1621,6 +1634,7 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
     const revenue = toNumber(row.revenue);
     const tickets = toNumber(row.tickets);
     const itemUnits = toNumber(row.item_units);
+    const itemLines = toNumber(row.item_lines);
     const label =
       report === "weekday"
         ? weekdayLabel(toNumber(row.segment_key))
@@ -1642,8 +1656,9 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
       documents: toNumber(row.documents),
       tickets,
       itemUnits,
+      itemLines,
       averageTicket: tickets > 0 ? revenue / tickets : 0,
-      unitsPerTicket: tickets > 0 ? itemUnits / tickets : 0,
+      unitsPerTicket: tickets > 0 ? itemLines / tickets : 0,
       activeDays: toNumber(row.active_days)
     };
   });
@@ -1666,8 +1681,9 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
       documents: toNumber(summary?.documents),
       tickets: summaryTickets,
       itemUnits: toNumber(summary?.item_units),
+      itemLines: toNumber(summary?.item_lines),
       averageTicket: summaryTickets > 0 ? summaryRevenue / summaryTickets : 0,
-      unitsPerTicket: summaryTickets > 0 ? toNumber(summary?.item_units) / summaryTickets : 0,
+      unitsPerTicket: summaryTickets > 0 ? toNumber(summary?.item_lines) / summaryTickets : 0,
       activeDays: toNumber(summary?.active_days)
     },
     segments: rows

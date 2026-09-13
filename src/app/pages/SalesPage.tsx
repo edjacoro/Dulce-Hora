@@ -116,7 +116,7 @@ export function SalesPage() {
     includeWaste: true,
     includeProductDetails: true,
     maxRuns: 55,
-    detailLimit: 3
+    detailLimit: 6
   });
 
   return (
@@ -153,7 +153,7 @@ export function SalesPage() {
                 includeWaste: true,
                 includeProductDetails: true,
                 maxRuns: 55,
-                detailLimit: 3
+                detailLimit: 6
               });
             }}
             syncDisabled={!isDayMode || importJob.state.active}

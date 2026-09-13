@@ -38,7 +38,7 @@ type HydrationOptions = {
 export async function hydrateDulceHoraDetailsUntilDone({
   date,
   queryClient,
-  limit = 3,
+  limit = 6,
   maxRuns = 45,
   pauseMs = 550,
   shouldContinue = () => true,

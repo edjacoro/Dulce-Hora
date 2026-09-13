@@ -189,7 +189,7 @@ export async function downloadAnalysisPdf(data: AnalysisDashboard, periodLabel: 
     { label: "Pedidos", value: formatInteger(data.summary.tickets), tone: "blue" },
     { label: "Ticket promedio", value: formatCurrency(data.summary.averageTicket), tone: "green" },
     { label: "Unidades", value: formatNumber(data.summary.itemUnits), tone: "amber" },
-    { label: "Unid./ticket", value: formatNumber(data.summary.unitsPerTicket), tone: "slate" }
+    { label: "Articulos/ticket", value: formatNumber(data.summary.unitsPerTicket), tone: "slate" }
   ]);
   report.bars(
     `Segmentos por ${analysisMetricLabel(data.filters.metric).toLowerCase()}`,

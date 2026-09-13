@@ -144,7 +144,7 @@ export function App() {
         void hydrateDulceHoraDetailsUntilDone({
           date: syncDate,
           queryClient,
-          limit: 3,
+          limit: 6,
           maxRuns: 8,
           shouldContinue: () => !cancelled
         }).catch((error) => {

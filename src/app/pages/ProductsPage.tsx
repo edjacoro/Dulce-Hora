@@ -97,7 +97,7 @@ export function ProductsPage() {
     includeWaste: true,
     includeProductDetails: true,
     maxRuns: 55,
-    detailLimit: 3
+    detailLimit: 6
   });
 
   return (
@@ -117,7 +117,7 @@ export function ProductsPage() {
                 includeWaste: true,
                 includeProductDetails: true,
                 maxRuns: 55,
-                detailLimit: 3
+                detailLimit: 6
               });
             }}
             type="button"
