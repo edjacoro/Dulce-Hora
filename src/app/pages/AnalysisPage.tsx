@@ -7,6 +7,7 @@ import {
   PackageSearch,
   PackageX,
   ReceiptText,
+  ShoppingBag,
   Users,
   WalletCards
 } from "lucide-react";
@@ -187,10 +188,11 @@ export function AnalysisPage() {
 
       {data ? (
         <>
-          <div className="kpi-grid">
+          <div className="kpi-grid analysis-kpi-grid">
             <Kpi icon={WalletCards} label="Venta filtrada" value={formatCurrency(data.summary.revenue)} tone="red" />
             <Kpi icon={ReceiptText} label="Pedidos" value={formatInteger(data.summary.tickets)} tone="blue" />
             <Kpi icon={BarChart3} label="Ticket promedio" value={formatCurrency(data.summary.averageTicket)} tone="green" />
+            <Kpi icon={ShoppingBag} label="Articulos por ticket" value={formatNumber(data.summary.unitsPerTicket)} tone="slate" />
             <Kpi icon={PackageSearch} label="Unidades" value={formatNumber(data.summary.itemUnits)} tone="amber" />
             <Kpi icon={CalendarDays} label="Dias medidos" value={formatInteger(data.summary.activeDays)} />
           </div>

@@ -542,6 +542,10 @@ a {
   gap: 12px;
 }
 
+.analysis-kpi-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .kpi-card {
   display: grid;
   gap: 10px;
