@@ -732,6 +732,13 @@ export type ScheduleResponse = {
     isSaturday: boolean;
     closesAt: string | null;
   }>;
+  businessHours: Array<{
+    date: string;
+    weekday: string;
+    openTime: string | null;
+    closeTime: string | null;
+    active: boolean;
+  }>;
   summary: {
     employees: number;
     shifts: number;
@@ -740,4 +747,36 @@ export type ScheduleResponse = {
     absences: number;
     estimatedCost: number;
   };
+};
+
+export type ScheduleChangeValue = {
+  id?: string;
+  employeeId?: string;
+  employeeName?: string;
+  date?: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  breakMinutes?: number;
+  hours?: number;
+  isHoliday?: boolean;
+  isAbsence?: boolean;
+  notes?: string | null;
+  source?: string;
+  approved?: boolean;
+};
+
+export type ScheduleChange = {
+  id: string;
+  shiftId: string;
+  operation: "created" | "updated" | "reassigned" | "deleted";
+  previous: ScheduleChangeValue | null;
+  next: ScheduleChangeValue | null;
+  changedAt: string;
+  changedBy: string;
+  status: "approved";
+};
+
+export type ScheduleChangesResponse = {
+  month: string;
+  changes: ScheduleChange[];
 };

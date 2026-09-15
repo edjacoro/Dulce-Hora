@@ -2,7 +2,7 @@ import type { Express, Request } from "express";
 import { randomUUID } from "node:crypto";
 import * as XLSX from "xlsx";
 import { z } from "zod";
-import { requireAuth, requireRole } from "./auth.js";
+import { requireAuth, requireRole, type AuthUser } from "./auth.js";
 import { db } from "./db.js";
 import { getDefaultBranch } from "./dulceHoraSync.js";
 
@@ -68,6 +68,28 @@ type ManualHolidayRow = {
   active: boolean;
 };
 
+type BusinessHourRow = {
+  weekday: number;
+  open_time: string | null;
+  close_time: string | null;
+  active: boolean;
+};
+
+type PersistedShiftRow = {
+  id: string;
+  shift_date: string;
+  start_time: string | null;
+  end_time: string | null;
+  break_minutes: number;
+  hours: string;
+  is_holiday: boolean;
+  is_absence: boolean;
+  notes: string | null;
+  source: string;
+  employee_id: string;
+  employee_name: string;
+};
+
 type ScheduleHoliday = {
   id: string | null;
   date: string;
@@ -116,6 +138,11 @@ type EmployeeScheduleTemplate = {
   rotation: "none" | "diego" | "vicky" | "mica" | "romi";
   fixedShifts: EmployeeScheduleBlock[];
   notes: string;
+};
+
+type EmployeeScheduleRow = {
+  id: string;
+  schedule_template: string | null;
 };
 
 const DEFAULT_SCHEDULE_SHEET_URL =
@@ -328,7 +355,8 @@ export function registerScheduleRoutes(app: Express) {
         );
     const role = roleForEmployee(input.name, input.role);
     const color = input.color || defaultEmployeeColor(input.name);
-    const scheduleTemplate = JSON.stringify(normalizeScheduleTemplate(input.scheduleTemplate));
+    const normalizedScheduleTemplate = normalizeScheduleTemplate(input.scheduleTemplate);
+    const scheduleTemplate = JSON.stringify(normalizedScheduleTemplate);
     const socialCharges = computedSocialCharges(input.onPayroll, input.monthlyNetSalary);
     const employerCost = computedEmployerCost(input.monthlyNetSalary, socialCharges);
 
@@ -373,6 +401,11 @@ export function registerScheduleRoutes(app: Express) {
           existing.rows[0].id
         ]
       );
+      await refreshFutureScheduleFromTemplate(
+        req.user!.organization_id,
+        existing.rows[0].id,
+        normalizedScheduleTemplate
+      );
       res.json({ id: existing.rows[0].id, updated: true });
       return;
     }
@@ -406,6 +439,8 @@ export function registerScheduleRoutes(app: Express) {
       ]
     );
 
+    await refreshFutureScheduleFromTemplate(req.user!.organization_id, id, normalizedScheduleTemplate);
+
     res.status(201).json({ id, updated: false });
   });
 
@@ -421,7 +456,8 @@ export function registerScheduleRoutes(app: Express) {
 
     await ensureDefaultScheduleForMonth(req.user!.organization_id, branch.id, month, range);
 
-    const [employeesResult, shiftsResult, manualHolidaysResult] = await Promise.all([
+    await ensureBranchBusinessHours(db, branch.id);
+    const [employeesResult, shiftsResult, manualHolidaysResult, businessHoursResult] = await Promise.all([
       db.query<EmployeeRow>(
         `select id, name, role, weekly_hours::text, monthly_net_salary::text,
                 monthly_gross_salary::text, employer_cost::text, photo_url,
@@ -471,6 +507,16 @@ export function registerScheduleRoutes(app: Express) {
            and active = true
          order by holiday_date`,
         [branch.id, range.from, range.to]
+      ),
+      db.query<BusinessHourRow>(
+        `select weekday,
+                substring(open_time::text from 1 for 5) as open_time,
+                substring(close_time::text from 1 for 5) as close_time,
+                active
+         from branch_business_hours
+         where branch_id = $1
+         order by weekday`,
+        [branch.id]
       )
     ]);
 
@@ -537,6 +583,19 @@ export function registerScheduleRoutes(app: Express) {
       };
     });
     const holidays = scheduleHolidaySummaries(holidayMap, shifts);
+    const businessHoursByWeekday = new Map(businessHoursResult.rows.map((row) => [row.weekday, row]));
+    const businessHours = daysBetween(range).map((date) => {
+      const configured = businessHoursByWeekday.get(weekdayNumber(date));
+      const holiday = holidayMap.get(date);
+      const active = Boolean(configured?.active) && holiday?.kind !== "closure";
+      return {
+        date,
+        weekday: weekdayLabel(date),
+        openTime: active ? configured?.open_time ?? null : null,
+        closeTime: active ? holiday?.closesAt ?? configured?.close_time ?? null : null,
+        active
+      };
+    });
 
     res.json({
       month,
@@ -547,6 +606,7 @@ export function registerScheduleRoutes(app: Express) {
       employeeSummary,
       dailySummary,
       holidays,
+      businessHours,
       summary: {
         employees: employees.filter((employee) => employee.active).length,
         shifts: shifts.length,
@@ -692,7 +752,52 @@ export function registerScheduleRoutes(app: Express) {
     res.status(201).json({ id, updated: false });
   });
 
-  app.post("/api/schedule/shifts", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
+  app.get("/api/schedule/changes", requireAuth, async (req, res) => {
+    const month = readMonth(req) ?? todayArgentina().slice(0, 7);
+    const range = monthRange(month);
+    const changes = await db.query<{
+      id: string;
+      action: string;
+      entity_id: string;
+      previous_value: Record<string, unknown> | null;
+      new_value: Record<string, unknown> | null;
+      created_at: string;
+      user_name: string | null;
+    }>(
+      `select al.id,
+              al.action,
+              al.entity_id,
+              al.previous_value,
+              al.new_value,
+              al.created_at::text,
+              u.name as user_name
+       from audit_logs al
+       left join users u on u.id = al.user_id
+       where al.organization_id = $1
+         and al.entity = 'staff_shifts'
+         and al.action like 'schedule.shift.%'
+         and coalesce(al.new_value->>'date', al.previous_value->>'date') >= $2
+         and coalesce(al.new_value->>'date', al.previous_value->>'date') <= $3
+       order by al.created_at desc`,
+      [req.user!.organization_id, range.from, range.to]
+    );
+
+    res.json({
+      month,
+      changes: changes.rows.map((row) => ({
+        id: row.id,
+        shiftId: row.entity_id,
+        operation: scheduleOperation(row.action),
+        previous: row.previous_value,
+        next: row.new_value,
+        changedAt: row.created_at,
+        changedBy: row.user_name ?? "Dueño",
+        status: "approved" as const
+      }))
+    });
+  });
+
+  app.post("/api/schedule/shifts", requireRole(["owner"]), async (req, res) => {
     const input = shiftInputSchema.parse(req.body);
     const branch = await getDefaultBranch(req.user!.organization_id);
 
@@ -710,18 +815,44 @@ export function registerScheduleRoutes(app: Express) {
       return;
     }
 
+    if (!isEditableScheduleDate(input.date) || (input.dateTo && !isEditableScheduleDate(input.dateTo))) {
+      res.status(409).json({ error: "Los meses cerrados son historicos y no se pueden modificar" });
+      return;
+    }
+
+    if (!input.isAbsence && (!input.startTime || !input.endTime)) {
+      res.status(400).json({ error: "Confirma la hora de entrada y salida" });
+      return;
+    }
+
     if (!input.id && input.isAbsence && input.dateTo && input.dateTo >= input.date) {
       const dates = datesBetween(input.date, input.dateTo);
       await db.transaction(async (tx) => {
-        await tx.query(
-          `delete from staff_shifts
+        const removedDefaults = await tx.query<PersistedShiftRow>(
+          `delete from staff_shifts ss
            where branch_id = $1
              and employee_id = $2
              and shift_date >= $3
              and shift_date <= $4
-             and source like 'default-schedule%'`,
-          [branch.id, input.employeeId, input.date, input.dateTo]
+             and source like 'default-schedule%'
+           returning ss.id,
+                     ss.shift_date::text,
+                     substring(ss.start_time::text from 1 for 5) as start_time,
+                     substring(ss.end_time::text from 1 for 5) as end_time,
+                     ss.break_minutes,
+                     ss.hours::text,
+                     ss.is_holiday,
+                     ss.is_absence,
+                     ss.notes,
+                     ss.source,
+                     ss.employee_id,
+                     $5::text as employee_name`,
+          [branch.id, input.employeeId, input.date, input.dateTo, ""]
         );
+
+        for (const removed of removedDefaults.rows) {
+          await protectDefaultShift(tx, branch.id, removed, req.user!.id, "absence");
+        }
 
         for (const date of dates) {
           const existingAbsence = await tx.query<{ id: string }>(
@@ -735,56 +866,126 @@ export function registerScheduleRoutes(app: Express) {
           );
           if (existingAbsence.rows[0]) continue;
 
+          const id = randomUUID();
           await tx.query(
             `insert into staff_shifts
               (id, branch_id, employee_id, shift_date, start_time, end_time, break_minutes,
                hours, is_holiday, is_absence, notes, source)
              values ($1, $2, $3, $4, null, null, 0, 0, false, true, $5, 'manual')`,
-            [randomUUID(), branch.id, input.employeeId, date, input.notes || "Vacaciones"]
+            [id, branch.id, input.employeeId, date, input.notes || "Vacaciones"]
           );
+          await auditScheduleShift(tx, req.user!, "schedule.shift.created", id, null, {
+            id,
+            employeeId: input.employeeId,
+            employeeName: await employeeName(tx, input.employeeId),
+            date,
+            startTime: null,
+            endTime: null,
+            breakMinutes: 0,
+            hours: 0,
+            isHoliday: false,
+            isAbsence: true,
+            notes: input.notes || "Vacaciones",
+            source: "manual",
+            approved: true
+          });
         }
       });
       res.status(201).json({ id: null, count: dates.length, updated: false });
       return;
     }
 
+    const previous = input.id ? await findShiftDetails(db, input.id, branch.id) : null;
+    if (input.id && !previous) {
+      res.status(404).json({ error: "Turno no encontrado" });
+      return;
+    }
+
+    if (previous && !isEditableScheduleDate(previous.shift_date)) {
+      res.status(409).json({ error: "Los meses cerrados son historicos y no se pueden modificar" });
+      return;
+    }
+
+    if (!input.isAbsence) {
+      const conflict = await findOverlappingShift(
+        db,
+        branch.id,
+        input.employeeId,
+        input.date,
+        input.startTime!,
+        input.endTime!,
+        input.id ?? null
+      );
+      if (conflict) {
+        res.status(409).json({
+          error: `${conflict.employee_name} ya tiene un turno el ${conflict.shift_date} de ${conflict.start_time} a ${conflict.end_time}`,
+          conflict: serializeShift(conflict)
+        });
+        return;
+      }
+    }
+
     const hours = input.isAbsence ? 0 : computeHours(input.startTime, input.endTime, input.breakMinutes);
-    const existing = input.id
-      ? await findShift(input.id, branch.id)
-      : await db.query<{ id: string }>(
-          `select id
-           from staff_shifts
-           where branch_id = $1
-             and employee_id = $2
-             and shift_date = $3
-             and coalesce(substring(start_time::text from 1 for 5), '') = coalesce($4, '')
-             and coalesce(substring(end_time::text from 1 for 5), '') = coalesce($5, '')
-             and is_absence = $6`,
+
+    if (previous) {
+      const nextSource = isDefaultScheduleSource(previous.source) ? "manual-override" : previous.source;
+      await db.transaction(async (tx) => {
+        if (isDefaultScheduleSource(previous.source)) {
+          await protectDefaultShift(tx, branch.id, previous, req.user!.id, "manual_override");
+        }
+        await tx.query(
+          `update staff_shifts
+           set employee_id = $1,
+               shift_date = $2,
+               start_time = $3,
+               end_time = $4,
+               break_minutes = $5,
+               hours = $6,
+               is_holiday = $7,
+               is_absence = $8,
+               notes = $9,
+               source = $10,
+               updated_at = now()
+           where id = $11 and branch_id = $12`,
           [
-            branch.id,
             input.employeeId,
             input.date,
             input.isAbsence ? null : input.startTime,
             input.isAbsence ? null : input.endTime,
-            input.isAbsence
+            input.breakMinutes,
+            hours,
+            input.isHoliday,
+            input.isAbsence,
+            input.notes || null,
+            nextSource,
+            previous.id,
+            branch.id
           ]
         );
+        const next = await findShiftDetails(tx, previous.id, branch.id);
+        await auditScheduleShift(
+          tx,
+          req.user!,
+          previous.employee_id === input.employeeId ? "schedule.shift.updated" : "schedule.shift.reassigned",
+          previous.id,
+          serializeShift(previous),
+          next ? { ...serializeShift(next), approved: true } : null
+        );
+      });
+      res.json({ id: previous.id, updated: true });
+      return;
+    }
 
-    if (existing.rows[0]) {
-      await db.query(
-        `update staff_shifts
-         set employee_id = $1,
-             shift_date = $2,
-             start_time = $3,
-             end_time = $4,
-             break_minutes = $5,
-             hours = $6,
-             is_holiday = $7,
-             is_absence = $8,
-             notes = $9,
-             updated_at = now()
-         where id = $10`,
+    const id = randomUUID();
+    await db.transaction(async (tx) => {
+      await tx.query(
+        `insert into staff_shifts
+          (id, branch_id, employee_id, shift_date, start_time, end_time, break_minutes,
+           hours, is_holiday, is_absence, notes, source)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'manual')`,
         [
+          id,
+          branch.id,
           input.employeeId,
           input.date,
           input.isAbsence ? null : input.startTime,
@@ -793,53 +994,44 @@ export function registerScheduleRoutes(app: Express) {
           hours,
           input.isHoliday,
           input.isAbsence,
-          input.notes || null,
-          existing.rows[0].id
+          input.notes || null
         ]
       );
-      res.json({ id: existing.rows[0].id, updated: true });
-      return;
-    }
-
-    const id = randomUUID();
-    await db.query(
-      `insert into staff_shifts
-        (id, branch_id, employee_id, shift_date, start_time, end_time, break_minutes,
-         hours, is_holiday, is_absence, notes, source)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'manual')`,
-      [
-        id,
-        branch.id,
-        input.employeeId,
-        input.date,
-        input.isAbsence ? null : input.startTime,
-        input.isAbsence ? null : input.endTime,
-        input.breakMinutes,
-        hours,
-        input.isHoliday,
-        input.isAbsence,
-        input.notes || null
-      ]
-    );
+      const next = await findShiftDetails(tx, id, branch.id);
+      await auditScheduleShift(tx, req.user!, "schedule.shift.created", id, null, next ? { ...serializeShift(next), approved: true } : null);
+    });
     res.status(201).json({ id, updated: false });
   });
 
-  app.delete("/api/schedule/shifts/:id", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
+  app.delete("/api/schedule/shifts/:id", requireRole(["owner"]), async (req, res) => {
     const branch = await getDefaultBranch(req.user!.organization_id);
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa" });
       return;
     }
 
-    const deleted = await db.query<{ id: string }>(
-      `delete from staff_shifts where id = $1 and branch_id = $2 returning id`,
-      [req.params.id, branch.id]
-    );
-
-    if (!deleted.rows[0]) {
+    const shiftId = String(req.params.id);
+    const previous = await findShiftDetails(db, shiftId, branch.id);
+    if (!previous) {
       res.status(404).json({ error: "Turno no encontrado" });
       return;
     }
+
+    if (!isEditableScheduleDate(previous.shift_date)) {
+      res.status(409).json({ error: "Los meses cerrados son historicos y no se pueden modificar" });
+      return;
+    }
+
+    await db.transaction(async (tx) => {
+      if (isDefaultScheduleSource(previous.source)) {
+        await protectDefaultShift(tx, branch.id, previous, req.user!.id, "deleted");
+      }
+      await tx.query(`delete from staff_shifts where id = $1 and branch_id = $2`, [shiftId, branch.id]);
+      await auditScheduleShift(tx, req.user!, "schedule.shift.deleted", previous.id, serializeShift(previous), {
+        date: previous.shift_date,
+        approved: true
+      });
+    });
 
     res.json({ ok: true });
   });
@@ -879,6 +1071,8 @@ async function ensureDefaultScheduleForMonth(
   month: string,
   range: { from: string; to: string }
 ) {
+  if (month < todayArgentina().slice(0, 7)) return;
+
   const existingPrefill = await db.query<{ id: string }>(
     `select id
      from schedule_month_prefills
@@ -899,25 +1093,24 @@ async function ensureDefaultScheduleForMonth(
 
     await removeLegacyDefaultSchedule(tx, branchId, range);
 
-    const employeeIds = new Map<string, string>();
     for (const employee of DEFAULT_SCHEDULE_EMPLOYEES) {
-      const id = await upsertDefaultScheduleEmployee(tx, organizationId, employee);
-      employeeIds.set(employee.name, id);
+      await upsertDefaultScheduleEmployee(tx, organizationId, employee);
     }
 
-    for (const date of daysBetween(range)) {
-      const weekday = weekdayNumber(date);
-      const rotationWeek = scheduleRotationWeek(date);
-      for (const employee of DEFAULT_SCHEDULE_EMPLOYEES) {
-        const employeeId = employeeIds.get(employee.name);
-        if (!employeeId) continue;
+    const scheduleEmployees = await tx.query<EmployeeScheduleRow>(
+      `select id, schedule_template
+       from employees
+       where organization_id = $1 and active = true`,
+      [organizationId]
+    );
 
-        for (const shift of employee.shifts) {
-          if (shift.weeks && !shift.weeks.includes(rotationWeek)) continue;
-          if (!shift.weekdays.includes(weekday)) continue;
+    for (const date of daysBetween(range)) {
+      for (const employee of scheduleEmployees.rows) {
+        const template = parseScheduleTemplate(employee.schedule_template);
+        for (const shift of scheduleBlocksForDate(template, date)) {
           const adjustedShift = defaultShiftForDate(date, shift.startTime, shift.endTime);
           if (!adjustedShift) continue;
-          await insertDefaultShiftIfMissing(tx, branchId, employeeId, date, adjustedShift.startTime, adjustedShift.endTime);
+          await insertDefaultShiftIfMissing(tx, branchId, employee.id, date, adjustedShift.startTime, adjustedShift.endTime);
         }
       }
     }
@@ -1023,6 +1216,18 @@ async function insertDefaultShiftIfMissing(
   startTime: string,
   endTime: string
 ) {
+  const exception = await queryable.query<{ id: string }>(
+    `select id
+     from schedule_shift_exceptions
+     where branch_id = $1
+       and employee_id = $2
+       and shift_date = $3
+       and substring(original_start_time::text from 1 for 5) = $4
+       and substring(original_end_time::text from 1 for 5) = $5`,
+    [branchId, employeeId, date, startTime, endTime]
+  );
+  if (exception.rows[0]) return;
+
   const existing = await queryable.query<{ id: string }>(
     `select id
      from staff_shifts
@@ -1056,11 +1261,245 @@ async function insertDefaultShiftIfMissing(
   );
 }
 
-async function findShift(id: string, branchId: string) {
-  return db.query<{ id: string }>(
-    `select id from staff_shifts where id = $1 and branch_id = $2`,
+async function refreshFutureScheduleFromTemplate(
+  organizationId: string,
+  employeeId: string,
+  template: EmployeeScheduleTemplate
+) {
+  const branch = await getDefaultBranch(organizationId);
+  if (!branch) return;
+
+  const fromDate = todayArgentina();
+  const currentMonth = fromDate.slice(0, 7);
+  const prefills = await db.query<{ month: string }>(
+    `select month
+     from schedule_month_prefills
+     where branch_id = $1 and source = $2 and month >= $3
+     order by month`,
+    [branch.id, DEFAULT_SCHEDULE_SOURCE, currentMonth]
+  );
+  const months = Array.from(new Set([currentMonth, ...prefills.rows.map((row) => row.month)]));
+
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `delete from staff_shifts
+       where branch_id = $1
+         and employee_id = $2
+         and shift_date >= $3
+         and source = $4`,
+      [branch.id, employeeId, fromDate, DEFAULT_SCHEDULE_SOURCE]
+    );
+
+    for (const month of months) {
+      const range = monthRange(month);
+      const dates = datesBetween(month === currentMonth ? fromDate : range.from, range.to);
+      for (const date of dates) {
+        for (const shift of scheduleBlocksForDate(template, date)) {
+          const adjustedShift = defaultShiftForDate(date, shift.startTime, shift.endTime);
+          if (!adjustedShift) continue;
+          await insertDefaultShiftIfMissing(
+            tx,
+            branch.id,
+            employeeId,
+            date,
+            adjustedShift.startTime,
+            adjustedShift.endTime
+          );
+        }
+      }
+    }
+  });
+}
+
+function scheduleBlocksForDate(template: EmployeeScheduleTemplate, date: string) {
+  const weekday = weekdayNumber(date);
+  const rotationWeek = scheduleRotationWeek(date);
+  return template.fixedShifts.filter((block) => {
+    const weekdays = weekdaysForText(block.days);
+    const weeks = weeksForText(block.weeks ?? "");
+    return weekdays.includes(weekday) && (!weeks || weeks.includes(rotationWeek));
+  });
+}
+
+function weekdaysForText(value: string) {
+  const text = normalize(value);
+  const names = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
+  const rangeMatch = text.match(
+    /(domingo|lunes|martes|miercoles|jueves|viernes|sabado)s?\s+(?:a|al)\s+(domingo|lunes|martes|miercoles|jueves|viernes|sabado)s?/
+  );
+  if (rangeMatch) {
+    const start = names.indexOf(rangeMatch[1]);
+    const end = names.indexOf(rangeMatch[2]);
+    const result: number[] = [];
+    for (let day = start; ; day = (day + 1) % 7) {
+      result.push(day);
+      if (day === end || result.length === 7) break;
+    }
+    return result;
+  }
+  return names.flatMap((name, index) => (new RegExp(`\\b${name}s?\\b`).test(text) ? [index] : []));
+}
+
+function weeksForText(value: string) {
+  const text = normalize(value);
+  if (!text) return null;
+  if (/impar/.test(text)) return [1, 3];
+  if (/par/.test(text)) return [2, 4];
+  const values = Array.from(text.matchAll(/\b([1-4])\b/g), (match) => Number(match[1]));
+  return values.length > 0 ? Array.from(new Set(values)) : null;
+}
+
+async function findShiftDetails(queryable: Queryable, id: string, branchId: string) {
+  const result = await queryable.query<PersistedShiftRow>(
+    `select ss.id,
+            ss.shift_date::text as shift_date,
+            substring(ss.start_time::text from 1 for 5) as start_time,
+            substring(ss.end_time::text from 1 for 5) as end_time,
+            ss.break_minutes,
+            ss.hours::text,
+            ss.is_holiday,
+            ss.is_absence,
+            ss.notes,
+            ss.source,
+            ss.employee_id,
+            e.name as employee_name
+     from staff_shifts ss
+     join employees e on e.id = ss.employee_id
+     where ss.id = $1 and ss.branch_id = $2`,
     [id, branchId]
   );
+  return result.rows[0] ?? null;
+}
+
+async function findOverlappingShift(
+  queryable: Queryable,
+  branchId: string,
+  employeeId: string,
+  date: string,
+  startTime: string,
+  endTime: string,
+  excludeId: string | null
+) {
+  const rows = await queryable.query<PersistedShiftRow>(
+    `select ss.id,
+            ss.shift_date::text as shift_date,
+            substring(ss.start_time::text from 1 for 5) as start_time,
+            substring(ss.end_time::text from 1 for 5) as end_time,
+            ss.break_minutes,
+            ss.hours::text,
+            ss.is_holiday,
+            ss.is_absence,
+            ss.notes,
+            ss.source,
+            ss.employee_id,
+            e.name as employee_name
+     from staff_shifts ss
+     join employees e on e.id = ss.employee_id
+     where ss.branch_id = $1
+       and ss.employee_id = $2
+       and ss.shift_date between ($3::date - interval '1 day') and ($3::date + interval '1 day')
+       and ss.is_absence = false
+       and ss.start_time is not null
+       and ss.end_time is not null
+       and ($4::text is null or ss.id <> $4)`,
+    [branchId, employeeId, date, excludeId]
+  );
+  const candidate = absoluteShiftInterval(date, date, startTime, endTime);
+  return rows.rows.find((row) => {
+    if (!row.start_time || !row.end_time) return false;
+    return intervalsOverlap(candidate, absoluteShiftInterval(row.shift_date, date, row.start_time, row.end_time));
+  }) ?? null;
+}
+
+async function protectDefaultShift(
+  queryable: Queryable,
+  branchId: string,
+  shift: PersistedShiftRow,
+  userId: string,
+  reason: string
+) {
+  if (!shift.start_time || !shift.end_time) return;
+  await queryable.query(
+    `insert into schedule_shift_exceptions
+      (id, branch_id, employee_id, shift_date, original_start_time, original_end_time, reason, created_by)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)
+     on conflict (branch_id, employee_id, shift_date, original_start_time, original_end_time)
+     do update set reason = excluded.reason, created_by = excluded.created_by`,
+    [randomUUID(), branchId, shift.employee_id, shift.shift_date, shift.start_time, shift.end_time, reason, userId]
+  );
+}
+
+async function auditScheduleShift(
+  queryable: Queryable,
+  user: AuthUser,
+  action: string,
+  entityId: string,
+  previousValue: unknown,
+  newValue: unknown
+) {
+  await queryable.query(
+    `insert into audit_logs
+      (id, organization_id, user_id, action, entity, entity_id, previous_value, new_value)
+     values ($1, $2, $3, $4, 'staff_shifts', $5, $6, $7)`,
+    [
+      randomUUID(),
+      user.organization_id,
+      user.id,
+      action,
+      entityId,
+      JSON.stringify(previousValue),
+      JSON.stringify(newValue)
+    ]
+  );
+}
+
+async function employeeName(queryable: Queryable, employeeId: string) {
+  const result = await queryable.query<{ name: string }>(`select name from employees where id = $1`, [employeeId]);
+  return result.rows[0]?.name ?? "Empleado";
+}
+
+function serializeShift(shift: PersistedShiftRow) {
+  return {
+    id: shift.id,
+    employeeId: shift.employee_id,
+    employeeName: shift.employee_name,
+    date: shift.shift_date,
+    startTime: shift.start_time,
+    endTime: shift.end_time,
+    breakMinutes: shift.break_minutes,
+    hours: toNumber(shift.hours),
+    isHoliday: shift.is_holiday,
+    isAbsence: shift.is_absence,
+    notes: shift.notes,
+    source: shift.source
+  };
+}
+
+function scheduleOperation(action: string) {
+  if (action.endsWith("created")) return "created";
+  if (action.endsWith("reassigned")) return "reassigned";
+  if (action.endsWith("deleted")) return "deleted";
+  return "updated";
+}
+
+async function ensureBranchBusinessHours(queryable: Queryable, branchId: string) {
+  const defaults = [
+    [0, "08:00", "19:00"],
+    [1, "07:30", "19:30"],
+    [2, "07:30", "19:30"],
+    [3, "07:30", "19:30"],
+    [4, "07:30", "19:30"],
+    [5, "07:30", "19:30"],
+    [6, "07:30", "19:30"]
+  ] as const;
+  for (const [weekday, openTime, closeTime] of defaults) {
+    await queryable.query(
+      `insert into branch_business_hours (id, branch_id, weekday, open_time, close_time, active)
+       values ($1, $2, $3, $4, $5, true)
+       on conflict (branch_id, weekday) do nothing`,
+      [`business-hours:${branchId}:${weekday}`, branchId, weekday, openTime, closeTime]
+    );
+  }
 }
 
 async function upsertEmployee(queryable: Queryable, organizationId: string, employee: ParsedEmployee) {
@@ -1386,12 +1825,28 @@ function ageRangeFor(age: number | null) {
   return "55+";
 }
 
-function computeHours(startTime?: string | null, endTime?: string | null, breakMinutes = 0) {
+export function computeHours(startTime?: string | null, endTime?: string | null, breakMinutes = 0) {
   if (!startTime || !endTime) return 0;
   const start = minutes(startTime);
   let end = minutes(endTime);
   if (end <= start) end += 24 * 60;
   return Math.max(0, (end - start - breakMinutes) / 60);
+}
+
+export function intervalsOverlap(left: { start: number; end: number }, right: { start: number; end: number }) {
+  return left.start < right.end && right.start < left.end;
+}
+
+function absoluteShiftInterval(shiftDate: string, referenceDate: string, startTime: string, endTime: string) {
+  const dayOffset = utcDay(shiftDate) - utcDay(referenceDate);
+  const start = dayOffset * 24 * 60 + minutes(startTime);
+  let end = dayOffset * 24 * 60 + minutes(endTime);
+  if (end <= start) end += 24 * 60;
+  return { start, end };
+}
+
+function isEditableScheduleDate(date: string) {
+  return date.slice(0, 7) >= todayArgentina().slice(0, 7);
 }
 
 function minutes(value: string) {

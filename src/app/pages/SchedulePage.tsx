@@ -14,8 +14,10 @@ import {
   Users
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { api, type ScheduleResponse, type ScheduleShift } from "../api";
-import { downloadSchedulePdf } from "../reportPdf";
+import { api, type ScheduleChangesResponse, type ScheduleChangeValue, type ScheduleResponse, type ScheduleShift } from "../api";
+import { ShiftEditorModal, type ShiftEditorValue } from "../components/ShiftEditorModal";
+import { ScheduleWeekView } from "../components/ScheduleWeekView";
+import { downloadSchedulePdf, downloadScheduleWeekPdf } from "../reportPdf";
 
 type EmployeeForm = {
   id: string;
@@ -28,18 +30,7 @@ type EmployeeForm = {
   active: boolean;
 };
 
-type ShiftForm = {
-  id: string;
-  employeeId: string;
-  date: string;
-  dateTo: string;
-  startTime: string;
-  endTime: string;
-  breakMinutes: string;
-  isHoliday: boolean;
-  isAbsence: boolean;
-  notes: string;
-};
+type ShiftForm = ShiftEditorValue;
 
 type HolidayForm = {
   id: string;
@@ -65,8 +56,8 @@ const emptyShift = (): ShiftForm => ({
   employeeId: "",
   date: today(),
   dateTo: "",
-  startTime: "07:00",
-  endTime: "13:30",
+  startTime: "",
+  endTime: "",
   breakMinutes: "0",
   isHoliday: false,
   isAbsence: false,
@@ -84,6 +75,10 @@ const emptyHoliday = (month?: string): HolidayForm => ({
 export function SchedulePage() {
   const queryClient = useQueryClient();
   const [month, setMonth] = useState(() => today().slice(0, 7));
+  const [activeView, setActiveView] = useState<"month" | "week" | "changes">("month");
+  const [weekAnchor, setWeekAnchor] = useState(() => startOfWeek(today()));
+  const [hiddenEmployeeIds, setHiddenEmployeeIds] = useState<string[]>([]);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [employeeForm, setEmployeeForm] = useState<EmployeeForm>(() => emptyEmployee());
   const [shiftForm, setShiftForm] = useState<ShiftForm>(() => emptyShift());
   const [holidayForm, setHolidayForm] = useState<HolidayForm>(() => emptyHoliday());
@@ -92,6 +87,28 @@ export function SchedulePage() {
     queryKey: ["schedule", month],
     queryFn: () => api<ScheduleResponse>(`/api/schedule?month=${month}`)
   });
+  const weekDates = useMemo(() => datesForWeek(weekAnchor), [weekAnchor]);
+  const weekPrimaryMonth = weekDates[0].slice(0, 7);
+  const weekSecondaryMonth = weekDates[weekDates.length - 1].slice(0, 7);
+  const weekPrimarySchedule = useQuery({
+    queryKey: ["schedule", weekPrimaryMonth],
+    queryFn: () => api<ScheduleResponse>(`/api/schedule?month=${weekPrimaryMonth}`),
+    enabled: activeView === "week"
+  });
+  const weekSecondarySchedule = useQuery({
+    queryKey: ["schedule", weekSecondaryMonth],
+    queryFn: () => api<ScheduleResponse>(`/api/schedule?month=${weekSecondaryMonth}`),
+    enabled: activeView === "week" && weekSecondaryMonth !== weekPrimaryMonth
+  });
+  const changes = useQuery({
+    queryKey: ["schedule-changes", month],
+    queryFn: () => api<ScheduleChangesResponse>(`/api/schedule/changes?month=${month}`),
+    enabled: activeView === "changes"
+  });
+  const weekData = useMemo(
+    () => mergeScheduleData(weekPrimarySchedule.data, weekSecondaryMonth === weekPrimaryMonth ? undefined : weekSecondarySchedule.data),
+    [weekPrimarySchedule.data, weekSecondaryMonth, weekPrimaryMonth, weekSecondarySchedule.data]
+  );
 
   const importSchedule = useMutation({
     mutationFn: () =>
@@ -122,13 +139,23 @@ export function SchedulePage() {
       }),
     onSuccess: async () => {
       setShiftForm((current) => ({ ...emptyShift(), employeeId: current.employeeId, date: current.date }));
-      await queryClient.invalidateQueries({ queryKey: ["schedule"] });
+      setEditorOpen(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["schedule"] }),
+        queryClient.invalidateQueries({ queryKey: ["schedule-changes"] })
+      ]);
     }
   });
 
   const deleteShift = useMutation({
     mutationFn: (id: string) => api<{ ok: true }>(`/api/schedule/shifts/${id}`, { method: "DELETE" }),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["schedule"] })
+    onSuccess: async () => {
+      setEditorOpen(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["schedule"] }),
+        queryClient.invalidateQueries({ queryKey: ["schedule-changes"] })
+      ]);
+    }
   });
 
   const saveHoliday = useMutation({
@@ -150,8 +177,53 @@ export function SchedulePage() {
 
   const data = schedule.data;
   const activeEmployees = useMemo(() => data?.employees.filter((employee) => employee.active) ?? [], [data?.employees]);
-  const selectedEmployee = activeEmployees.find((employee) => employee.id === shiftForm.employeeId);
+  const editorEmployees = useMemo(
+    () => (weekData?.employees ?? activeEmployees).filter((employee) => employee.active),
+    [activeEmployees, weekData?.employees]
+  );
+  const scheduleEmployeeIds = useMemo(() => editorEmployees.map((employee) => employee.id), [editorEmployees]);
+  const visibleEmployeeIds = useMemo(
+    () => scheduleEmployeeIds.filter((id) => !hiddenEmployeeIds.includes(id)),
+    [hiddenEmployeeIds, scheduleEmployeeIds]
+  );
   const todayDate = useMemo(() => today(), []);
+
+  const openNewShift = (date?: string) => {
+    setShiftForm({ ...emptyShift(), date: date ?? (weekDates.includes(todayDate) ? todayDate : weekDates[0]) });
+    setEditorOpen(true);
+  };
+
+  const openShift = (shift: ScheduleShift) => {
+    if (!isEditableMonth(shift.date)) return;
+    setShiftForm({
+      id: shift.id,
+      employeeId: shift.employeeId,
+      date: shift.date,
+      dateTo: "",
+      startTime: shift.startTime ?? "",
+      endTime: shift.endTime ?? "",
+      breakMinutes: String(shift.breakMinutes),
+      isHoliday: shift.isHoliday,
+      isAbsence: shift.isAbsence,
+      notes: shift.notes ?? ""
+    });
+    setEditorOpen(true);
+  };
+
+  const submitShift = () => {
+    saveShift.mutate({
+      id: shiftForm.id || null,
+      employeeId: shiftForm.employeeId,
+      date: shiftForm.date,
+      dateTo: shiftForm.dateTo || null,
+      startTime: shiftForm.isAbsence ? null : shiftForm.startTime,
+      endTime: shiftForm.isAbsence ? null : shiftForm.endTime,
+      breakMinutes: Number(shiftForm.breakMinutes || 0),
+      isHoliday: shiftForm.isHoliday,
+      isAbsence: shiftForm.isAbsence,
+      notes: shiftForm.notes
+    });
+  };
 
   return (
     <section className="page-section schedule-page">
@@ -165,18 +237,20 @@ export function SchedulePage() {
             <FileSpreadsheet size={17} aria-hidden="true" />
             {importSchedule.isPending ? "Importando..." : "Importar grilla"}
           </button>
-          <button
-            className="secondary-button"
-            disabled={!data}
-            onClick={() => {
-              if (data) void downloadSchedulePdf(data, monthName(month));
-            }}
-            type="button"
-          >
-            <Download size={17} aria-hidden="true" />
-            PDF mensual
-          </button>
-          <MonthControls month={month} onMonth={setMonth} />
+          {activeView === "month" ? (
+            <button
+              className="secondary-button"
+              disabled={!data}
+              onClick={() => {
+                if (data) void downloadSchedulePdf(data, monthName(month));
+              }}
+              type="button"
+            >
+              <Download size={17} aria-hidden="true" />
+              PDF mensual
+            </button>
+          ) : null}
+          {activeView !== "week" ? <MonthControls month={month} onMonth={setMonth} /> : null}
         </div>
       </div>
 
@@ -189,6 +263,20 @@ export function SchedulePage() {
       ) : null}
       {importSchedule.error ? <p className="form-error">{importSchedule.error.message}</p> : null}
 
+      <div className="schedule-view-tabs" role="tablist" aria-label="Vistas de grilla">
+        <button className={activeView === "month" ? "active" : ""} onClick={() => setActiveView("month")} role="tab" type="button">
+          Vista mensual
+        </button>
+        <button className={activeView === "week" ? "active" : ""} onClick={() => setActiveView("week")} role="tab" type="button">
+          Grilla semanal
+        </button>
+        <button className={activeView === "changes" ? "active" : ""} onClick={() => setActiveView("changes")} role="tab" type="button">
+          Cambios aprobados
+        </button>
+      </div>
+
+      {activeView === "month" ? (
+        <>
       <div className="kpi-grid">
         <Kpi icon={Users} label="Personas activas" value={data?.summary.employees ?? 0} tone="blue" />
         <Kpi icon={CalendarDays} label="Turnos" value={data?.summary.shifts ?? 0} tone="green" />
@@ -198,7 +286,7 @@ export function SchedulePage() {
         <Kpi icon={Trash2} label="Inasistencias" value={data?.summary.absences ?? 0} tone="amber" />
       </div>
 
-      <ScheduleCalendar data={data} month={month} todayDate={todayDate} />
+      <ScheduleCalendar data={data} month={month} todayDate={todayDate} onAdd={openNewShift} onEdit={openShift} />
 
       <div className="split-layout schedule-edit-layout">
         <section className="content-band compact-band">
@@ -264,98 +352,6 @@ export function SchedulePage() {
           </form>
         </section>
 
-        <section className="content-band compact-band">
-          <h2>
-            <CalendarDays size={18} aria-hidden="true" />
-            Turno, suplencia o ausencia
-          </h2>
-          <form
-            className="form-grid dense-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              saveShift.mutate({
-                id: shiftForm.id || null,
-                employeeId: shiftForm.employeeId,
-                date: shiftForm.date,
-                dateTo: shiftForm.dateTo || null,
-                startTime: shiftForm.isAbsence ? null : shiftForm.startTime,
-                endTime: shiftForm.isAbsence ? null : shiftForm.endTime,
-                breakMinutes: Number(shiftForm.breakMinutes || 0),
-                isHoliday: shiftForm.isHoliday,
-                isAbsence: shiftForm.isAbsence,
-                notes: shiftForm.notes
-              });
-            }}
-          >
-            <label className="full">
-              Persona
-              <select value={shiftForm.employeeId} onChange={(event) => updateShift(setShiftForm, "employeeId", event.target.value)} required>
-                <option value="">Seleccionar</option>
-                {activeEmployees.map((employee) => (
-                  <option key={employee.id} value={employee.id}>
-                    {employee.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Fecha
-              <input value={shiftForm.date} onChange={(event) => updateShift(setShiftForm, "date", event.target.value)} type="date" />
-            </label>
-            <label>
-              Hasta
-              <input
-                value={shiftForm.dateTo}
-                disabled={!shiftForm.isAbsence}
-                onChange={(event) => updateShift(setShiftForm, "dateTo", event.target.value)}
-                type="date"
-              />
-            </label>
-            <label>
-              Entrada
-              <input
-                value={shiftForm.startTime}
-                disabled={shiftForm.isAbsence}
-                onChange={(event) => updateShift(setShiftForm, "startTime", event.target.value)}
-                type="time"
-              />
-            </label>
-            <label>
-              Salida
-              <input
-                value={shiftForm.endTime}
-                disabled={shiftForm.isAbsence}
-                onChange={(event) => updateShift(setShiftForm, "endTime", event.target.value)}
-                type="time"
-              />
-            </label>
-            <label>
-              Descanso min.
-              <input value={shiftForm.breakMinutes} onChange={(event) => updateShift(setShiftForm, "breakMinutes", event.target.value)} />
-            </label>
-            <label className="checkbox-label">
-              <input checked={shiftForm.isHoliday} onChange={(event) => updateShift(setShiftForm, "isHoliday", event.target.checked)} type="checkbox" />
-              Feriado
-            </label>
-            <label className="checkbox-label">
-              <input checked={shiftForm.isAbsence} onChange={(event) => updateShift(setShiftForm, "isAbsence", event.target.checked)} type="checkbox" />
-              Ausencia / vacaciones
-            </label>
-            <label className="full">
-              Nota
-              <textarea value={shiftForm.notes} onChange={(event) => updateShift(setShiftForm, "notes", event.target.value)} rows={2} />
-            </label>
-            <div className="full shift-preview">
-              <strong>{selectedEmployee ? formatCurrency(selectedEmployee.hourlyCost) : "-"} / hora</strong>
-              <span>{shiftForm.isHoliday ? "Feriado se estima al doble" : "Costo normal estimado"}</span>
-            </div>
-            {saveShift.error ? <p className="form-error">{saveShift.error.message}</p> : null}
-            <button className="primary-button full" disabled={saveShift.isPending} type="submit">
-              <Plus size={17} aria-hidden="true" />
-              {shiftForm.id ? "Actualizar turno" : "Guardar turno"}
-            </button>
-          </form>
-        </section>
       </div>
 
       <div className="split-layout">
@@ -468,15 +464,28 @@ export function SchedulePage() {
                       {!shift.isHoliday && !shift.isAbsence ? <span className="signal-pill slate">Normal</span> : null}
                     </td>
                     <td>
-                      <button
-                        className="icon-only-button"
-                        disabled={deleteShift.isPending}
-                        onClick={() => deleteShift.mutate(shift.id)}
-                        type="button"
-                        aria-label="Eliminar turno"
-                      >
-                        <Trash2 size={16} aria-hidden="true" />
-                      </button>
+                      <div className="row-actions">
+                        <button
+                          className="icon-only-button"
+                          disabled={!isEditableMonth(shift.date)}
+                          onClick={() => openShift(shift)}
+                          type="button"
+                          aria-label="Editar turno"
+                        >
+                          <Pencil size={16} aria-hidden="true" />
+                        </button>
+                        <button
+                          className="icon-only-button"
+                          disabled={deleteShift.isPending || !isEditableMonth(shift.date)}
+                          onClick={() => {
+                            if (window.confirm("¿Eliminar este turno? El cambio quedará registrado.")) deleteShift.mutate(shift.id);
+                          }}
+                          type="button"
+                          aria-label="Eliminar turno"
+                        >
+                          <Trash2 size={16} aria-hidden="true" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -485,6 +494,47 @@ export function SchedulePage() {
           </div>
         )}
       </section>
+        </>
+      ) : null}
+
+      {activeView === "week" ? (
+        <ScheduleWeekView
+          data={weekData}
+          dates={weekDates}
+          employees={editorEmployees}
+          visibleEmployeeIds={visibleEmployeeIds}
+          loading={weekPrimarySchedule.isLoading || (weekSecondaryMonth !== weekPrimaryMonth && weekSecondarySchedule.isLoading)}
+          onVisibleEmployeeIds={(ids) => setHiddenEmployeeIds(scheduleEmployeeIds.filter((id) => !ids.includes(id)))}
+          onPreviousWeek={() => setWeekAnchor(shiftDate(weekAnchor, -7))}
+          onNextWeek={() => setWeekAnchor(shiftDate(weekAnchor, 7))}
+          onWeekDate={(date) => setWeekAnchor(startOfWeek(date))}
+          onAdd={openNewShift}
+          onEdit={openShift}
+          onPdf={() => {
+            if (weekData) void downloadScheduleWeekPdf(weekData, weekDates, visibleEmployeeIds);
+          }}
+        />
+      ) : null}
+
+      {activeView === "changes" ? (
+        <ScheduleChangesPanel response={changes.data} loading={changes.isLoading} error={changes.error?.message ?? null} />
+      ) : null}
+
+      <ShiftEditorModal
+        open={editorOpen}
+        value={shiftForm}
+        employees={editorEmployees}
+        saving={saveShift.isPending}
+        deleting={deleteShift.isPending}
+        error={saveShift.error?.message ?? deleteShift.error?.message ?? null}
+        onChange={setShiftForm}
+        onClose={() => setEditorOpen(false)}
+        onSave={submitShift}
+        onDuplicate={() => setShiftForm((current) => ({ ...current, id: "" }))}
+        onDelete={() => {
+          if (shiftForm.id) deleteShift.mutate(shiftForm.id);
+        }}
+      />
     </section>
   );
 }
@@ -492,11 +542,15 @@ export function SchedulePage() {
 function ScheduleCalendar({
   data,
   month,
-  todayDate
+  todayDate,
+  onAdd,
+  onEdit
 }: {
   data: ScheduleResponse | undefined;
   month: string;
   todayDate: string;
+  onAdd: (date: string) => void;
+  onEdit: (shift: ScheduleShift) => void;
 }) {
   const cells = useMemo(() => calendarCells(month), [month]);
   const shiftsByDate = useMemo(() => {
@@ -548,7 +602,18 @@ function ScheduleCalendar({
             >
               <div className="schedule-day-head">
                 <strong>{Number(date.slice(8, 10))}</strong>
-                {isToday ? <span>Hoy</span> : null}
+                <div>
+                  {isToday ? <span>Hoy</span> : null}
+                  <button
+                    className="schedule-day-add"
+                    disabled={!isEditableMonth(date)}
+                    onClick={() => onAdd(date)}
+                    type="button"
+                    aria-label={`Agregar turno el ${shortDate(date)}`}
+                  >
+                    <Plus size={14} aria-hidden="true" />
+                  </button>
+                </div>
               </div>
               {holiday ? (
                 <small className="schedule-day-holiday">{holiday.kind === "closure" ? "Cierre" : holiday.name}</small>
@@ -559,18 +624,21 @@ function ScheduleCalendar({
               </div>
               <div className="schedule-shift-list">
                 {shifts.slice(0, 5).map((shift) => (
-                  <span
+                  <button
                     className="schedule-shift-pill"
+                    disabled={!isEditableMonth(shift.date)}
                     key={shift.id}
+                    onClick={() => onEdit(shift)}
                     style={{
                       backgroundColor: shift.employeeColor,
                       color: textColorFor(shift.employeeColor)
                     }}
+                    type="button"
                   >
                     <b>{shift.employeeName}</b>
                     {shift.isAbsence ? "Ausente" : `${shift.startTime ?? "--"}-${shift.endTime ?? "--"}`}
                     {shift.holidayName ? <small>Feriado</small> : null}
-                  </span>
+                  </button>
                 ))}
                 {shifts.length > 5 ? <span className="schedule-more">+{shifts.length - 5} mas</span> : null}
               </div>
@@ -578,6 +646,66 @@ function ScheduleCalendar({
           );
         })}
       </div>
+    </section>
+  );
+}
+
+function ScheduleChangesPanel({
+  response,
+  loading,
+  error
+}: {
+  response: ScheduleChangesResponse | undefined;
+  loading: boolean;
+  error: string | null;
+}) {
+  return (
+    <section className="content-band schedule-changes-panel">
+      <div className="table-heading">
+        <div>
+          <h2>Cambios aprobados</h2>
+          <p className="muted-text">{response ? monthName(response.month) : ""}</p>
+        </div>
+        <span className="signal-pill green">Aprobación inmediata</span>
+      </div>
+      {loading ? <p className="muted-text">Cargando cambios...</p> : null}
+      {error ? <p className="form-error">{error}</p> : null}
+      {!loading && (response?.changes.length ?? 0) === 0 ? <div className="dashed-empty">Sin cambios registrados en este mes.</div> : null}
+      {(response?.changes.length ?? 0) > 0 ? (
+        <div className="data-table-wrap">
+          <table className="data-table schedule-changes-table">
+            <thead>
+              <tr>
+                <th>Operación</th>
+                <th>Empleado</th>
+                <th>Fecha</th>
+                <th>Horario anterior</th>
+                <th>Horario nuevo</th>
+                <th>Modificación</th>
+                <th>Usuario</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {response?.changes.map((change) => {
+                const current = change.next?.employeeName ? change.next : change.previous;
+                return (
+                  <tr key={change.id}>
+                    <td><strong>{operationLabel(change.operation)}</strong></td>
+                    <td>{current?.employeeName ?? "-"}</td>
+                    <td>{current?.date ? shortDate(current.date) : "-"}</td>
+                    <td>{scheduleValueLabel(change.previous)}</td>
+                    <td>{scheduleValueLabel(change.next)}</td>
+                    <td>{formatDateTime(change.changedAt)}</td>
+                    <td>{change.changedBy}</td>
+                    <td><span className="signal-pill green">Aprobado</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -772,14 +900,6 @@ function updateEmployee<T extends keyof EmployeeForm>(
   setForm((current) => ({ ...current, [key]: value }));
 }
 
-function updateShift<T extends keyof ShiftForm>(
-  setForm: React.Dispatch<React.SetStateAction<ShiftForm>>,
-  key: T,
-  value: ShiftForm[T]
-) {
-  setForm((current) => ({ ...current, [key]: value }));
-}
-
 function updateHoliday<T extends keyof HolidayForm>(
   setForm: React.Dispatch<React.SetStateAction<HolidayForm>>,
   key: T,
@@ -803,6 +923,88 @@ function shiftMonth(month: string, delta: number) {
   const [year, monthNumber] = month.split("-").map(Number);
   const date = new Date(year, monthNumber - 1 + delta, 1);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function shiftDate(value: string, delta: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day + delta);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function startOfWeek(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return shiftDate(value, -date.getDay());
+}
+
+function datesForWeek(start: string) {
+  return Array.from({ length: 7 }, (_, index) => shiftDate(start, index));
+}
+
+function isEditableMonth(value: string) {
+  return value.slice(0, 7) >= today().slice(0, 7);
+}
+
+function mergeScheduleData(primary: ScheduleResponse | undefined, secondary: ScheduleResponse | undefined) {
+  if (!primary) return secondary;
+  if (!secondary || secondary.month === primary.month) return primary;
+  const dedupe = <T,>(rows: T[], key: (row: T) => string) => [...new Map(rows.map((row) => [key(row), row])).values()];
+  const employees = dedupe([...primary.employees, ...secondary.employees], (row) => row.id);
+  const shifts = dedupe([...primary.shifts, ...secondary.shifts], (row) => row.id);
+  const employeeSummary = employees.map((employee) => {
+    const employeeShifts = shifts.filter((shift) => shift.employeeId === employee.id);
+    return {
+      employeeId: employee.id,
+      employeeName: employee.name,
+      hours: employeeShifts.reduce((sum, shift) => sum + shift.hours, 0),
+      holidayHours: employeeShifts.filter((shift) => shift.isHoliday).reduce((sum, shift) => sum + shift.hours, 0),
+      absences: employeeShifts.filter((shift) => shift.isAbsence).length,
+      shifts: employeeShifts.length,
+      hourlyCost: employee.hourlyCost,
+      estimatedCost: employeeShifts.reduce((sum, shift) => sum + shift.estimatedCost, 0)
+    };
+  });
+  const dailySummary = dedupe([...primary.dailySummary, ...secondary.dailySummary], (row) => row.date);
+  return {
+    ...primary,
+    range: { from: primary.range.from, to: secondary.range.to },
+    employees,
+    shifts,
+    employeeSummary,
+    dailySummary,
+    holidays: dedupe([...primary.holidays, ...secondary.holidays], (row) => `${row.source}:${row.date}`),
+    businessHours: dedupe([...primary.businessHours, ...secondary.businessHours], (row) => row.date),
+    summary: {
+      employees: employees.filter((employee) => employee.active).length,
+      shifts: shifts.length,
+      hours: shifts.reduce((sum, shift) => sum + shift.hours, 0),
+      holidayHours: shifts.filter((shift) => shift.isHoliday).reduce((sum, shift) => sum + shift.hours, 0),
+      absences: shifts.filter((shift) => shift.isAbsence).length,
+      estimatedCost: shifts.reduce((sum, shift) => sum + shift.estimatedCost, 0)
+    }
+  } satisfies ScheduleResponse;
+}
+
+function operationLabel(operation: ScheduleChangesResponse["changes"][number]["operation"]) {
+  if (operation === "created") return "Alta";
+  if (operation === "reassigned") return "Reasignación";
+  if (operation === "deleted") return "Eliminación";
+  return "Edición";
+}
+
+function scheduleValueLabel(value: ScheduleChangeValue | null) {
+  if (!value) return "-";
+  if (value.isAbsence) return "Ausencia";
+  if (!value.startTime || !value.endTime) return "-";
+  return `${value.startTime} a ${value.endTime}`;
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("es-AR", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    dateStyle: "short",
+    timeStyle: "short"
+  }).format(new Date(value));
 }
 
 function calendarCells(month: string) {

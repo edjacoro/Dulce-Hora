@@ -310,15 +310,59 @@ export async function downloadSchedulePdf(data: ScheduleResponse, monthLabel: st
   report.table(
     "Turnos del mes",
     ["Fecha", "Persona", "Horario", "Hs", "Marca"],
-    data.shifts.slice(0, 42).map((row) => [
+    data.shifts.map((row) => [
       shortDate(row.date),
       row.employeeName,
       row.isAbsence ? "Inasistencia" : `${row.startTime ?? "--"} a ${row.endTime ?? "--"}`,
       formatNumber(row.hours),
       row.isHoliday ? row.holidayName ?? "Feriado" : row.isAbsence ? "Ausente" : ""
-    ])
+    ]),
+    { maxRows: "all" }
   );
   report.save(`grilla-horaria-${data.month}.pdf`);
+}
+
+export async function downloadScheduleWeekPdf(data: ScheduleResponse, dates: string[], visibleEmployeeIds: string[]) {
+  const visible = new Set(visibleEmployeeIds);
+  const dateSet = new Set(dates);
+  const shifts = data.shifts.filter((shift) => dateSet.has(shift.date) && visible.has(shift.employeeId));
+  const hours = shifts.reduce((total, shift) => total + shift.hours, 0);
+  const people = new Set(shifts.filter((shift) => !shift.isAbsence).map((shift) => shift.employeeId)).size;
+  const report = createReport(
+    "Grilla semanal",
+    `${shortDate(dates[0])} al ${shortDate(dates[dates.length - 1])}`,
+    "Turnos temporales y horario de atencion"
+  );
+  report.metrics([
+    { label: "Personas visibles", value: formatInteger(people), tone: "blue" },
+    { label: "Turnos", value: formatInteger(shifts.length), tone: "green" },
+    { label: "Horas", value: formatNumber(hours), tone: "slate" },
+    {
+      label: "Horas feriado",
+      value: formatNumber(shifts.filter((shift) => shift.isHoliday).reduce((total, shift) => total + shift.hours, 0)),
+      tone: "amber"
+    }
+  ]);
+  report.table(
+    "Horario de atencion",
+    ["Dia", "Apertura", "Cierre"],
+    data.businessHours
+      .filter((row) => dateSet.has(row.date))
+      .map((row) => [shortDate(row.date), row.active ? row.openTime ?? "-" : "Cerrado", row.active ? row.closeTime ?? "-" : "-"])
+  );
+  report.table(
+    "Turnos de la semana",
+    ["Fecha", "Persona", "Horario", "Hs", "Marca"],
+    shifts.map((row) => [
+      shortDate(row.date),
+      row.employeeName,
+      row.isAbsence ? "Inasistencia" : `${row.startTime ?? "--"} a ${row.endTime ?? "--"}`,
+      formatNumber(row.hours),
+      row.isHoliday ? row.holidayName ?? "Feriado" : row.isAbsence ? "Ausente" : ""
+    ]),
+    { maxRows: "all" }
+  );
+  report.save(`grilla-semanal-${dates[0]}-${dates[dates.length - 1]}.pdf`);
 }
 
 export async function downloadEmployeeFilePdf(employee: EmployeeRecord) {
