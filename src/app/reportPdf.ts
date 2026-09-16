@@ -6,6 +6,7 @@ import type {
   SalesDocument,
   SalesSummary,
   ScheduleResponse,
+  ScheduleShift,
   WasteRecord,
   WasteSummary
 } from "./api";
@@ -276,6 +277,7 @@ export async function downloadSchedulePdf(data: ScheduleResponse, monthLabel: st
     { label: "Horas feriado", value: formatNumber(data.summary.holidayHours), tone: "amber" },
     { label: "Costo estimado", value: formatCurrency(data.summary.estimatedCost), tone: "red" }
   ]);
+  report.monthSchedule(data.month, data.shifts);
   report.bars(
     "Costo por persona",
     data.employeeSummary.map((row) => ({
@@ -343,6 +345,11 @@ export async function downloadScheduleWeekPdf(data: ScheduleResponse, dates: str
       tone: "amber"
     }
   ]);
+  report.weekSchedule(
+    dates,
+    shifts,
+    data.businessHours.filter((row) => dateSet.has(row.date))
+  );
   report.table(
     "Horario de atencion",
     ["Dia", "Apertura", "Cierre"],
@@ -440,6 +447,18 @@ function createReport(title: string, periodLabel: string, subtitle: string) {
       });
       y += Math.ceil(metrics.length / columns) * (cardHeight + gap) + 6;
     },
+    monthSchedule(month: string, shifts: ScheduleShift[]) {
+      ensureSpace(monthScheduleHeight(month));
+      y = drawMonthSchedule(doc, y, month, shifts);
+    },
+    weekSchedule(
+      dates: string[],
+      shifts: ScheduleShift[],
+      businessHours: ScheduleResponse["businessHours"]
+    ) {
+      ensureSpace(150);
+      y = drawWeekSchedule(doc, y, dates, shifts, businessHours);
+    },
     bars(titleText: string, rows: BarRow[], formatter: (value: number) => string) {
       const visible = rows.filter((row) => row.value > 0).slice(0, 10);
       ensureSpace(visible.length * 8 + 24);
@@ -532,6 +551,215 @@ async function loadImageDataUrl(source: string) {
       });
     })
     .catch(() => null);
+}
+
+function monthScheduleHeight(month: string) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const firstWeekday = new Date(year, monthNumber - 1, 1).getDay();
+  const days = new Date(year, monthNumber, 0).getDate();
+  return 21 + Math.ceil((firstWeekday + days) / 7) * 23;
+}
+
+function drawMonthSchedule(doc: jsPDF, y: number, month: string, shifts: ScheduleShift[]) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const firstWeekday = new Date(year, monthNumber - 1, 1).getDay();
+  const days = new Date(year, monthNumber, 0).getDate();
+  const rows = Math.ceil((firstWeekday + days) / 7);
+  const weekdays = ["DOM", "LUN", "MAR", "MIE", "JUE", "VIE", "SAB"];
+  const width = page.width - page.margin * 2;
+  const cellWidth = width / 7;
+  const cellHeight = 23;
+
+  sectionTitle(doc, "Grilla visual del mes", y);
+  y += 8;
+  weekdays.forEach((weekday, index) => {
+    setText(doc, colors.slate, 6.5, "bold");
+    doc.text(weekday, page.margin + index * cellWidth + 2, y);
+  });
+  y += 4;
+
+  for (let slot = 0; slot < rows * 7; slot += 1) {
+    const day = slot - firstWeekday + 1;
+    const column = slot % 7;
+    const row = Math.floor(slot / 7);
+    const x = page.margin + column * cellWidth;
+    const cellY = y + row * cellHeight;
+    doc.setDrawColor(...colors.line);
+    doc.setFillColor(column === 0 || column === 6 ? 249 : 255, column === 0 || column === 6 ? 250 : 255, column === 0 || column === 6 ? 251 : 255);
+    doc.rect(x, cellY, cellWidth, cellHeight, "FD");
+    if (day < 1 || day > days) continue;
+
+    const date = `${year}-${String(monthNumber).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const dayShifts = shifts
+      .filter((shift) => shift.date === date)
+      .sort((left, right) => (left.startTime ?? "99:99").localeCompare(right.startTime ?? "99:99"));
+    setText(doc, colors.text, 7, "bold");
+    doc.text(String(day), x + 2, cellY + 4.5);
+
+    dayShifts.slice(0, 3).forEach((shift, index) => {
+      const rgb = hexToRgb(shift.employeeColor);
+      const soft = blendWithWhite(rgb, 0.84);
+      const shiftY = cellY + 6.5 + index * 4.3;
+      doc.setFillColor(...soft);
+      doc.roundedRect(x + 1.5, shiftY, cellWidth - 3, 3.6, 0.8, 0.8, "F");
+      doc.setFillColor(...rgb);
+      doc.rect(x + 1.5, shiftY, 1.2, 3.6, "F");
+      setText(doc, colors.text, 4.8, "bold");
+      const schedule = shift.isAbsence ? "Ausente" : `${shift.startTime ?? "--"}-${shift.endTime ?? "--"}`;
+      doc.text(trim(`${firstName(shift.employeeName)} ${schedule}`, 23), x + 3.4, shiftY + 2.55, { maxWidth: cellWidth - 5 });
+    });
+    if (dayShifts.length > 3) {
+      setText(doc, colors.muted, 4.8, "bold");
+      doc.text(`+${dayShifts.length - 3} turnos`, x + 2, cellY + 21);
+    }
+  }
+
+  return y + rows * cellHeight + 6;
+}
+
+function drawWeekSchedule(
+  doc: jsPDF,
+  y: number,
+  dates: string[],
+  shifts: ScheduleShift[],
+  businessHours: ScheduleResponse["businessHours"]
+) {
+  const width = page.width - page.margin * 2;
+  const axisWidth = 14;
+  const dayWidth = (width - axisWidth) / 7;
+  const gridHeight = 112;
+  const bounds = pdfTimelineBounds(shifts, businessHours);
+  const gridTop = y + 17;
+  const scale = gridHeight / (bounds.end - bounds.start);
+
+  sectionTitle(doc, "Grilla visual de la semana", y);
+  setText(doc, colors.muted, 6, "normal");
+  doc.text("Los bloques y el listado respetan los empleados visibles al exportar.", page.margin, y + 7);
+
+  dates.forEach((date, index) => {
+    const x = page.margin + axisWidth + index * dayWidth;
+    setText(doc, colors.slate, 6, "bold");
+    doc.text(`${weekdayPdf(date)} ${shortDate(date)}`, x + dayWidth / 2, gridTop - 3, { align: "center" });
+    doc.setDrawColor(...colors.line);
+    doc.rect(x, gridTop, dayWidth, gridHeight);
+
+    const business = businessHours.find((row) => row.date === date);
+    if (business?.active && business.openTime && business.closeTime) {
+      const start = Math.max(bounds.start, pdfClockMinutes(business.openTime));
+      const end = Math.min(bounds.end, pdfClockMinutes(business.closeTime));
+      if (end > start) {
+        doc.setFillColor(230, 239, 243);
+        doc.rect(x, gridTop + (start - bounds.start) * scale, dayWidth, (end - start) * scale, "F");
+      }
+    }
+
+    const dayShifts = shifts.filter((shift) => shift.date === date);
+    const timed = layoutPdfShifts(dayShifts.filter((shift) => !shift.isAbsence && shift.startTime && shift.endTime));
+    timed.forEach(({ shift, lane, laneCount }) => {
+      const rawStart = pdfClockMinutes(shift.startTime!);
+      let rawEnd = pdfClockMinutes(shift.endTime!);
+      if (rawEnd <= rawStart) rawEnd += 24 * 60;
+      const start = Math.max(bounds.start, rawStart);
+      const end = Math.min(bounds.end, rawEnd);
+      if (end <= start) return;
+      const gap = 0.6;
+      const blockWidth = dayWidth / laneCount;
+      const blockX = x + lane * blockWidth + gap;
+      const blockY = gridTop + (start - bounds.start) * scale;
+      const blockHeight = Math.max(4, (end - start) * scale);
+      const rgb = hexToRgb(shift.employeeColor);
+      doc.setFillColor(...rgb);
+      doc.roundedRect(blockX, blockY, Math.max(2, blockWidth - gap * 2), blockHeight, 0.8, 0.8, "F");
+      setText(doc, contrastText(rgb), 4.5, "bold");
+      doc.text(trim(firstName(shift.employeeName), 10), blockX + 1, blockY + 2.2, { maxWidth: blockWidth - 2 });
+      if (blockHeight >= 7) {
+        setText(doc, contrastText(rgb), 4, "normal");
+        doc.text(`${shift.startTime}-${shift.endTime}`, blockX + 1, blockY + 4.8, { maxWidth: blockWidth - 2 });
+      }
+    });
+
+    dayShifts.filter((shift) => shift.isAbsence).slice(0, 2).forEach((shift, absenceIndex) => {
+      doc.setFillColor(...colors.red);
+      doc.roundedRect(x + 1, gridTop + 1 + absenceIndex * 4.2, dayWidth - 2, 3.6, 0.8, 0.8, "F");
+      setText(doc, [255, 255, 255], 4.5, "bold");
+      doc.text(trim(`${firstName(shift.employeeName)} ausente`, 17), x + 2, gridTop + 3.5 + absenceIndex * 4.2);
+    });
+  });
+
+  const firstHour = Math.ceil(bounds.start / 60) * 60;
+  for (let minute = firstHour; minute <= bounds.end; minute += 120) {
+    const lineY = gridTop + (minute - bounds.start) * scale;
+    setText(doc, colors.muted, 5, "normal");
+    doc.text(`${String(Math.floor(minute / 60) % 24).padStart(2, "0")}:00`, page.margin + axisWidth - 1.5, lineY + 1.5, { align: "right" });
+    doc.setDrawColor(225, 230, 234);
+    doc.line(page.margin + axisWidth, lineY, page.width - page.margin, lineY);
+  }
+
+  return gridTop + gridHeight + 7;
+}
+
+function pdfTimelineBounds(shifts: ScheduleShift[], businessHours: ScheduleResponse["businessHours"]) {
+  const minutes: number[] = [];
+  businessHours.forEach((row) => {
+    if (row.openTime) minutes.push(pdfClockMinutes(row.openTime));
+    if (row.closeTime) minutes.push(pdfClockMinutes(row.closeTime));
+  });
+  shifts.forEach((shift) => {
+    if (shift.startTime) minutes.push(pdfClockMinutes(shift.startTime));
+    if (shift.endTime) minutes.push(pdfClockMinutes(shift.endTime));
+  });
+  const start = Math.max(0, Math.floor((Math.min(...minutes, 7 * 60) - 30) / 60) * 60);
+  const end = Math.min(24 * 60, Math.ceil((Math.max(...minutes, 20 * 60) + 30) / 60) * 60);
+  return { start, end: Math.max(start + 60, end) };
+}
+
+function layoutPdfShifts(shifts: ScheduleShift[]) {
+  const sorted = [...shifts].sort((left, right) => (left.startTime ?? "").localeCompare(right.startTime ?? ""));
+  const laneEnds: number[] = [];
+  const placed = sorted.map((shift) => {
+    const start = pdfClockMinutes(shift.startTime!);
+    let end = pdfClockMinutes(shift.endTime!);
+    if (end <= start) end += 24 * 60;
+    let lane = laneEnds.findIndex((laneEnd) => laneEnd <= start);
+    if (lane === -1) lane = laneEnds.length;
+    laneEnds[lane] = end;
+    return { shift, lane };
+  });
+  const laneCount = Math.max(1, laneEnds.length);
+  return placed.map((entry) => ({ ...entry, laneCount }));
+}
+
+function pdfClockMinutes(value: string) {
+  const [hour, minute] = value.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function weekdayPdf(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return ["Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"][new Date(year, month - 1, day).getDay()];
+}
+
+function firstName(value: string) {
+  return value.trim().split(/\s+/)[0] || value;
+}
+
+function hexToRgb(value: string): readonly [number, number, number] {
+  const normalized = value.replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return colors.slate;
+  return [
+    Number.parseInt(normalized.slice(0, 2), 16),
+    Number.parseInt(normalized.slice(2, 4), 16),
+    Number.parseInt(normalized.slice(4, 6), 16)
+  ];
+}
+
+function blendWithWhite(rgb: readonly [number, number, number], amount: number): readonly [number, number, number] {
+  return rgb.map((channel) => Math.round(channel + (255 - channel) * amount)) as unknown as readonly [number, number, number];
+}
+
+function contrastText(rgb: readonly [number, number, number]): readonly [number, number, number] {
+  const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+  return brightness > 168 ? colors.text : [255, 255, 255];
 }
 
 function drawHeader(doc: jsPDF, title: string, subtitle: string, periodLabel: string, logoDataUrl: string | null) {

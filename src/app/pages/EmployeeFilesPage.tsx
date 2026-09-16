@@ -395,7 +395,7 @@ export function EmployeeFilesPage() {
 
               <div className="template-row-list">
                 {form.scheduleTemplate.fixedShifts.map((block, index) => (
-                  <div className="template-row" key={`${index}-${block.days}`}>
+                  <div className="template-row" key={index}>
                     <input
                       value={block.weeks ?? ""}
                       onChange={(event) => updateBlock(setForm, index, "weeks", event.target.value)}

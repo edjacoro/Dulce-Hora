@@ -17,7 +17,52 @@ type Props = {
   onPdf: () => void;
 };
 
-const PIXELS_PER_HOUR = 44;
+const PIXELS_PER_HOUR = 88;
+const SHIFT_LANE_HEIGHT = 34;
+
+export function EmployeeFilters({
+  employees,
+  visibleEmployeeIds,
+  onVisibleEmployeeIds
+}: {
+  employees: ScheduleResponse["employees"];
+  visibleEmployeeIds: string[];
+  onVisibleEmployeeIds: (ids: string[]) => void;
+}) {
+  const visibleIds = useMemo(() => new Set(visibleEmployeeIds), [visibleEmployeeIds]);
+
+  const toggleEmployee = (employeeId: string) => {
+    onVisibleEmployeeIds(
+      visibleIds.has(employeeId)
+        ? visibleEmployeeIds.filter((id) => id !== employeeId)
+        : [...visibleEmployeeIds, employeeId]
+    );
+  };
+
+  return (
+    <div className="employee-filter-row" aria-label="Filtrar empleados">
+      <button
+        className={`employee-filter ${visibleEmployeeIds.length === employees.length ? "active" : ""}`}
+        onClick={() => onVisibleEmployeeIds(employees.map((employee) => employee.id))}
+        type="button"
+      >
+        Todos
+      </button>
+      {employees.map((employee) => (
+        <button
+          className={`employee-filter ${visibleIds.has(employee.id) ? "active" : ""}`}
+          key={employee.id}
+          onClick={() => toggleEmployee(employee.id)}
+          style={{ "--employee-color": employee.color } as CSSProperties}
+          type="button"
+        >
+          <span aria-hidden="true" />
+          {employee.name}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export function ScheduleWeekView({
   data,
@@ -36,20 +81,15 @@ export function ScheduleWeekView({
   const visibleIds = useMemo(() => new Set(visibleEmployeeIds), [visibleEmployeeIds]);
   const dateSet = useMemo(() => new Set(dates), [dates]);
   const shifts = useMemo(
-    () => (data?.shifts ?? []).filter((shift) => dateSet.has(shift.date) && visibleIds.has(shift.employeeId)),
+    () =>
+      (data?.shifts ?? []).filter(
+        (shift) => dateSet.has(shift.date) && visibleIds.has(shift.employeeId)
+      ),
     [data?.shifts, dateSet, visibleIds]
   );
   const bounds = useMemo(() => timelineBounds(data, shifts, dates), [data, shifts, dates]);
-  const timelineHeight = ((bounds.end - bounds.start) / 60) * PIXELS_PER_HOUR;
+  const timelineWidth = ((bounds.end - bounds.start) / 60) * PIXELS_PER_HOUR;
   const hourTicks = useMemo(() => hourTickValues(bounds.start, bounds.end), [bounds]);
-
-  const toggleEmployee = (employeeId: string) => {
-    onVisibleEmployeeIds(
-      visibleIds.has(employeeId)
-        ? visibleEmployeeIds.filter((id) => id !== employeeId)
-        : [...visibleEmployeeIds, employeeId]
-    );
-  };
 
   return (
     <section className="schedule-week-view">
@@ -72,75 +112,74 @@ export function ScheduleWeekView({
         </div>
 
         <div className="schedule-week-nav">
-          <button className="nav-button" onClick={onPreviousWeek} type="button" aria-label="Semana anterior">
+          <button
+            className="nav-button"
+            onClick={onPreviousWeek}
+            type="button"
+            aria-label="Semana anterior"
+          >
             <ArrowLeft size={17} aria-hidden="true" />
           </button>
           <label className="date-display schedule-week-date">
             <strong>{weekLabel(dates)}</strong>
-            <input value={dates[0]} onChange={(event) => onWeekDate(event.target.value)} type="date" aria-label="Elegir semana" />
+            <input
+              value={dates[0]}
+              onChange={(event) => onWeekDate(event.target.value)}
+              type="date"
+              aria-label="Elegir semana"
+            />
           </label>
-          <button className="nav-button" onClick={onNextWeek} type="button" aria-label="Semana siguiente">
+          <button
+            className="nav-button"
+            onClick={onNextWeek}
+            type="button"
+            aria-label="Semana siguiente"
+          >
             <ArrowRight size={17} aria-hidden="true" />
           </button>
         </div>
 
-        <div className="employee-filter-row" aria-label="Filtrar empleados">
-          <button
-            className={`employee-filter ${visibleEmployeeIds.length === employees.length ? "active" : ""}`}
-            onClick={() => onVisibleEmployeeIds(employees.map((employee) => employee.id))}
-            type="button"
-          >
-            Todos
-          </button>
-          {employees.map((employee) => (
-            <button
-              className={`employee-filter ${visibleIds.has(employee.id) ? "active" : ""}`}
-              key={employee.id}
-              onClick={() => toggleEmployee(employee.id)}
-              style={{ "--employee-color": employee.color } as CSSProperties}
-              type="button"
-            >
-              <span aria-hidden="true" />
-              {employee.name}
-            </button>
-          ))}
-        </div>
+        <EmployeeFilters
+          employees={employees}
+          visibleEmployeeIds={visibleEmployeeIds}
+          onVisibleEmployeeIds={onVisibleEmployeeIds}
+        />
       </section>
 
       <section className="content-band schedule-week-band">
         {loading ? <p className="muted-text">Cargando grilla...</p> : null}
-        {!loading && shifts.length === 0 ? <div className="dashed-empty">No hay turnos visibles en esta semana.</div> : null}
+        {!loading && shifts.length === 0 ? (
+          <div className="dashed-empty">No hay turnos visibles en esta semana.</div>
+        ) : null}
         <div className="schedule-week-scroll">
-          <div className="schedule-week-grid">
-            <div className="schedule-week-corner">Hora</div>
-            {dates.map((date) => {
-              const dayShifts = shifts.filter((shift) => shift.date === date);
-              const total = dayShifts.reduce((sum, shift) => sum + shift.hours, 0);
-              const business = data?.businessHours.find((row) => row.date === date);
-              return (
-                <button className="schedule-week-day-head" key={date} onClick={() => onAdd(date)} type="button">
-                  <span>{weekdayShort(date)}</span>
-                  <strong>{shortDate(date)}</strong>
-                  <small>{business?.active ? `${business.openTime}-${business.closeTime}` : "Cerrado"} · {formatHours(total)}</small>
-                </button>
-              );
-            })}
-
-            <div className="schedule-time-axis" style={{ height: timelineHeight }}>
-              {hourTicks.map((minute) => (
-                <span key={minute} style={{ top: ((minute - bounds.start) / 60) * PIXELS_PER_HOUR }}>
-                  {formatClock(minute)}
-                </span>
-              ))}
+          <div
+            className="schedule-week-horizontal"
+            style={{ "--timeline-width": `${timelineWidth}px` } as CSSProperties}
+          >
+            <div className="schedule-week-horizontal-head">
+              <div className="schedule-week-day-label-head">Día</div>
+              <div className="schedule-horizontal-time-axis">
+                {hourTicks.map((minute) => (
+                  <span
+                    key={minute}
+                    style={{ left: ((minute - bounds.start) / 60) * PIXELS_PER_HOUR }}
+                  >
+                    {formatClock(minute)}
+                  </span>
+                ))}
+              </div>
+              <div className="schedule-week-total-head">Horas</div>
             </div>
             {dates.map((date) => (
-              <ScheduleDayTimeline
+              <ScheduleDayRow
                 bounds={bounds}
                 businessHours={data?.businessHours.find((row) => row.date === date)}
-                height={timelineHeight}
+                date={date}
                 key={date}
+                onAdd={onAdd}
                 onEdit={onEdit}
                 shifts={shifts.filter((shift) => shift.date === date)}
+                timelineWidth={timelineWidth}
               />
             ))}
           </div>
@@ -150,80 +189,110 @@ export function ScheduleWeekView({
   );
 }
 
-function ScheduleDayTimeline({
+function ScheduleDayRow({
+  date,
   shifts,
   businessHours,
   bounds,
-  height,
+  timelineWidth,
+  onAdd,
   onEdit
 }: {
+  date: string;
   shifts: ScheduleShift[];
   businessHours: ScheduleResponse["businessHours"][number] | undefined;
   bounds: { start: number; end: number };
-  height: number;
+  timelineWidth: number;
+  onAdd: (date?: string) => void;
   onEdit: (shift: ScheduleShift) => void;
 }) {
-  const timed = layoutShifts(shifts.filter((shift) => !shift.isAbsence && shift.startTime && shift.endTime));
+  const timed = layoutShifts(
+    shifts.filter((shift) => !shift.isAbsence && shift.startTime && shift.endTime)
+  );
   const absences = shifts.filter((shift) => shift.isAbsence);
   const windowStart = businessHours?.openTime ? clockMinutes(businessHours.openTime) : null;
   const windowEnd = businessHours?.closeTime ? clockMinutes(businessHours.closeTime) : null;
+  const laneCount = timed.reduce((maximum, item) => Math.max(maximum, item.lane + 1), 0);
+  const rowHeight = Math.max(88, 16 + (laneCount + absences.length) * SHIFT_LANE_HEIGHT);
+  const total = shifts.reduce((sum, shift) => sum + shift.hours, 0);
 
   return (
-    <div className="schedule-day-timeline" style={{ height }}>
-      {businessHours?.active && windowStart !== null && windowEnd !== null ? (
-        <div
-          className="schedule-business-window"
-          style={{
-            top: ((windowStart - bounds.start) / 60) * PIXELS_PER_HOUR,
-            height: ((windowEnd - windowStart) / 60) * PIXELS_PER_HOUR
-          }}
-        />
-      ) : null}
-      {absences.map((shift, index) => (
-        <button
-          className="schedule-absence-block"
-          key={shift.id}
-          onClick={() => onEdit(shift)}
-          style={{ top: 4 + index * 24 }}
-          type="button"
-        >
-          {shift.employeeName}: ausente
-        </button>
-      ))}
-      {timed.map(({ shift, lane, laneCount }) => {
-        const start = clockMinutes(shift.startTime!);
-        let end = clockMinutes(shift.endTime!);
-        if (end <= start) end += 24 * 60;
-        const clippedStart = Math.max(bounds.start, start);
-        const clippedEnd = Math.min(bounds.end, end);
-        const left = (lane / laneCount) * 100;
-        const width = 100 / laneCount;
-        return (
+    <div className="schedule-week-day-row" style={{ minHeight: rowHeight }}>
+      <button className="schedule-week-day-label" onClick={() => onAdd(date)} type="button">
+        <strong>{weekdayLong(date)}</strong>
+        <span>{shortDate(date)}</span>
+        <small>
+          {businessHours?.active
+            ? `Atención ${businessHours.openTime}-${businessHours.closeTime}`
+            : "Local cerrado"}
+        </small>
+      </button>
+      <div
+        className="schedule-horizontal-day-timeline"
+        style={{ height: rowHeight, width: timelineWidth }}
+      >
+        {businessHours?.active && windowStart !== null && windowEnd !== null ? (
+          <div
+            className="schedule-horizontal-business-window"
+            style={{
+              left: ((windowStart - bounds.start) / 60) * PIXELS_PER_HOUR,
+              width: ((windowEnd - windowStart) / 60) * PIXELS_PER_HOUR
+            }}
+          />
+        ) : null}
+        {absences.map((shift, index) => (
           <button
-            className="schedule-timeline-shift"
+            className="schedule-horizontal-absence-block"
             key={shift.id}
             onClick={() => onEdit(shift)}
-            style={{
-              top: ((clippedStart - bounds.start) / 60) * PIXELS_PER_HOUR,
-              height: Math.max(22, ((clippedEnd - clippedStart) / 60) * PIXELS_PER_HOUR),
-              left: `calc(${left}% + 3px)`,
-              width: `calc(${width}% - 6px)`,
-              backgroundColor: shift.employeeColor,
-              color: textColorFor(shift.employeeColor)
-            }}
+            style={{ top: 8 + (laneCount + index) * SHIFT_LANE_HEIGHT }}
             type="button"
           >
-            <strong>{shift.employeeName}</strong>
-            <span>{shift.startTime}-{shift.endTime}</span>
+            {shift.employeeName}: ausente
           </button>
-        );
-      })}
+        ))}
+        {timed.map(({ shift, lane }) => {
+          const start = clockMinutes(shift.startTime!);
+          let end = clockMinutes(shift.endTime!);
+          if (end <= start) end += 24 * 60;
+          const clippedStart = Math.max(bounds.start, start);
+          const clippedEnd = Math.min(bounds.end, end);
+          return (
+            <button
+              className="schedule-horizontal-shift"
+              key={shift.id}
+              onClick={() => onEdit(shift)}
+              style={{
+                top: 8 + lane * SHIFT_LANE_HEIGHT,
+                left: ((clippedStart - bounds.start) / 60) * PIXELS_PER_HOUR + 3,
+                width: Math.max(38, ((clippedEnd - clippedStart) / 60) * PIXELS_PER_HOUR - 6),
+                backgroundColor: shift.employeeColor,
+                color: textColorFor(shift.employeeColor)
+              }}
+              type="button"
+            >
+              <strong>
+                {shift.employeeName}{" "}
+                <span>
+                  {shift.startTime}-{shift.endTime}
+                </span>
+              </strong>
+            </button>
+          );
+        })}
+      </div>
+      <div className="schedule-week-day-total">
+        <strong>{formatHours(total)}</strong>
+        <span>equipo</span>
+      </div>
     </div>
   );
 }
 
 function layoutShifts(shifts: ScheduleShift[]) {
-  const sorted = [...shifts].sort((left, right) => (left.startTime ?? "").localeCompare(right.startTime ?? ""));
+  const sorted = [...shifts].sort((left, right) =>
+    (left.startTime ?? "").localeCompare(right.startTime ?? "")
+  );
   const laneEnds: number[] = [];
   const placed = sorted.map((shift) => {
     const start = clockMinutes(shift.startTime!);
@@ -234,11 +303,14 @@ function layoutShifts(shifts: ScheduleShift[]) {
     laneEnds[lane] = end;
     return { shift, lane };
   });
-  const laneCount = Math.max(1, laneEnds.length);
-  return placed.map((item) => ({ ...item, laneCount }));
+  return placed;
 }
 
-function timelineBounds(data: ScheduleResponse | undefined, shifts: ScheduleShift[], dates: string[]) {
+function timelineBounds(
+  data: ScheduleResponse | undefined,
+  shifts: ScheduleShift[],
+  dates: string[]
+) {
   const values: number[] = [];
   for (const row of data?.businessHours ?? []) {
     if (!dates.includes(row.date)) continue;
@@ -274,9 +346,12 @@ function weekLabel(dates: string[]) {
   return `${shortDate(dates[0])} al ${shortDate(dates[dates.length - 1])}`;
 }
 
-function weekdayShort(value: string) {
+function weekdayLong(value: string) {
   const [year, month, day] = value.split("-").map(Number);
-  return new Intl.DateTimeFormat("es-AR", { weekday: "short" }).format(new Date(year, month - 1, day)).replace(".", "");
+  const label = new Intl.DateTimeFormat("es-AR", { weekday: "long" }).format(
+    new Date(year, month - 1, day)
+  );
+  return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
 function shortDate(value: string) {

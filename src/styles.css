@@ -1,7 +1,13 @@
 :root {
   color-scheme: light;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   --bg: #f6f7f8;
   --surface: #ffffff;
   --line: #dfe3e8;
@@ -938,7 +944,9 @@ a {
 
 .finance-header {
   display: grid;
-  grid-template-columns: minmax(100px, 130px) minmax(190px, auto) minmax(210px, 250px) minmax(340px, 1fr) minmax(420px, 1.1fr);
+  grid-template-columns:
+    minmax(100px, 130px) minmax(190px, auto) minmax(210px, 250px) minmax(340px, 1fr)
+    minmax(420px, 1.1fr);
   align-items: center;
   gap: 14px;
   padding: 18px 20px;
@@ -1704,6 +1712,16 @@ a {
   overflow: hidden;
 }
 
+.schedule-month-filters {
+  display: grid;
+  gap: 10px;
+  padding-block: 12px;
+}
+
+.schedule-month-filters .table-heading p {
+  margin: 2px 0 0;
+}
+
 .schedule-view-tabs {
   display: inline-grid;
   grid-template-columns: repeat(3, minmax(0, auto));
@@ -1966,137 +1984,204 @@ a {
   overscroll-behavior: contain;
 }
 
-.schedule-week-grid {
-  display: grid;
-  grid-template-columns: 62px repeat(7, minmax(142px, 1fr));
-  min-width: 1060px;
+.schedule-week-horizontal {
+  width: max-content;
+  min-width: calc(168px + var(--timeline-width) + 76px);
+  background: #fff;
 }
 
-.schedule-week-corner,
-.schedule-week-day-head {
+.schedule-week-horizontal-head,
+.schedule-week-day-row {
+  display: grid;
+  grid-template-columns: 168px var(--timeline-width) 76px;
+}
+
+.schedule-week-horizontal-head {
   position: sticky;
-  z-index: 5;
+  z-index: 8;
   top: 0;
-  min-height: 72px;
-  border: 0;
-  border-right: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  min-height: 44px;
+  border-bottom: 1px solid #15191c;
   background: #f7f9fa;
 }
 
-.schedule-week-corner {
-  display: grid;
-  place-items: center;
-  left: 0;
-  z-index: 7;
+.schedule-week-day-label-head,
+.schedule-week-total-head {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
   color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.schedule-week-day-head {
-  display: grid;
-  align-content: center;
-  gap: 2px;
-  padding: 8px;
-  color: var(--text);
-  text-align: left;
-}
-
-.schedule-week-day-head span {
-  color: var(--red);
   font-size: 0.72rem;
   font-weight: 900;
   text-transform: uppercase;
 }
 
-.schedule-week-day-head strong {
-  font-size: 0.95rem;
-}
-
-.schedule-week-day-head small {
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 800;
-}
-
-.schedule-time-axis {
+.schedule-week-day-label-head {
   position: sticky;
-  z-index: 4;
+  z-index: 10;
   left: 0;
   border-right: 1px solid var(--line);
   background: #f7f9fa;
 }
 
-.schedule-time-axis span {
+.schedule-week-total-head {
+  justify-content: center;
+  border-left: 1px solid var(--line);
+}
+
+.schedule-horizontal-time-axis {
+  position: relative;
+  width: var(--timeline-width);
+  background-image: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent 43px,
+    rgba(119, 136, 148, 0.18) 44px
+  );
+}
+
+.schedule-horizontal-time-axis span {
   position: absolute;
-  right: 8px;
-  transform: translateY(-50%);
+  top: 50%;
+  transform: translate(-50%, -50%);
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 800;
 }
 
-.schedule-day-timeline {
+.schedule-horizontal-time-axis span:first-child {
+  transform: translate(3px, -50%);
+}
+
+.schedule-horizontal-time-axis span:last-child {
+  transform: translate(calc(-100% - 3px), -50%);
+}
+
+.schedule-week-day-row {
   position: relative;
-  overflow: hidden;
-  border-right: 1px solid var(--line);
-  background-color: #fafcfd;
-  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 21px, rgba(140, 156, 168, 0.18) 22px);
+  background: #fff;
 }
 
-.schedule-business-window {
-  position: absolute;
-  right: 0;
+.schedule-week-day-row + .schedule-week-day-row {
+  border-top: 1px solid #15191c;
+}
+
+.schedule-week-day-label {
+  position: sticky;
+  z-index: 4;
   left: 0;
-  background: rgba(31, 82, 100, 0.09);
-  box-shadow: inset 3px 0 0 rgba(31, 82, 100, 0.24);
-}
-
-.schedule-timeline-shift,
-.schedule-absence-block {
-  position: absolute;
-  z-index: 2;
-  overflow: hidden;
+  display: grid;
+  align-content: center;
+  gap: 2px;
   border: 0;
-  border-radius: 6px;
-  padding: 4px 6px;
-  box-shadow: 0 2px 6px rgba(27, 39, 48, 0.16), inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  border-right: 1px solid var(--line);
+  padding: 12px;
+  background: #fff;
+  color: var(--text);
   text-align: left;
 }
 
-.schedule-timeline-shift {
-  display: grid;
-  align-content: start;
+.schedule-week-day-label strong {
+  font-size: 0.92rem;
+}
+
+.schedule-week-day-label span {
+  color: #526676;
+  font-size: 0.73rem;
+  font-weight: 900;
+}
+
+.schedule-week-day-label small {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.schedule-horizontal-day-timeline {
+  position: relative;
+  overflow: hidden;
+  background-color: #fafcfd;
+  background-image: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent 43px,
+    rgba(119, 136, 148, 0.18) 44px
+  );
+}
+
+.schedule-horizontal-business-window {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(31, 82, 100, 0.09);
+  box-shadow:
+    inset 1px 0 0 rgba(31, 82, 100, 0.2),
+    inset -1px 0 0 rgba(31, 82, 100, 0.2);
+}
+
+.schedule-horizontal-shift,
+.schedule-horizontal-absence-block {
+  position: absolute;
+  z-index: 2;
+  overflow: hidden;
+  height: 28px;
+  border: 0;
+  border-radius: 5px;
+  padding: 5px 8px;
+  box-shadow:
+    0 3px 8px rgba(27, 39, 48, 0.16),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  text-align: left;
+}
+
+.schedule-horizontal-shift {
   min-width: 0;
   line-height: 1.1;
 }
 
-.schedule-timeline-shift strong,
-.schedule-timeline-shift span {
+.schedule-horizontal-shift strong,
+.schedule-horizontal-shift span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.schedule-timeline-shift strong {
-  font-size: 0.72rem;
+.schedule-horizontal-shift strong {
+  display: block;
+  font-size: 0.69rem;
 }
 
-.schedule-timeline-shift span {
-  margin-top: 2px;
-  font-size: 0.65rem;
+.schedule-horizontal-shift span {
+  margin-left: 4px;
+  font-size: 0.62rem;
 }
 
-.schedule-absence-block {
-  right: 4px;
-  left: 4px;
-  height: 22px;
+.schedule-horizontal-absence-block {
+  left: 6px;
+  width: 180px;
   background: #fff0f1;
   color: #a20f1e;
   font-size: 0.67rem;
   font-weight: 900;
+}
+
+.schedule-week-day-total {
+  display: grid;
+  place-content: center;
+  border-left: 1px solid var(--line);
+  padding: 8px;
+  background: #fff;
+  text-align: center;
+}
+
+.schedule-week-day-total strong {
+  font-size: 0.9rem;
+}
+
+.schedule-week-day-total span {
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-weight: 800;
 }
 
 .schedule-modal-backdrop {
@@ -3215,33 +3300,33 @@ a {
 
   .form-grid,
   .kpi-grid,
-    .dashboard-hero,
-    .dashboard-action-grid,
-    .dashboard-status-band,
-    .dashboard-status-grid,
-    .ai-question-form,
-    .ai-range-controls,
-    .ai-answer-grid,
-    .sync-form,
-    .split-layout,
+  .dashboard-hero,
+  .dashboard-action-grid,
+  .dashboard-status-band,
+  .dashboard-status-grid,
+  .ai-question-form,
+  .ai-range-controls,
+  .ai-answer-grid,
+  .sync-form,
+  .split-layout,
   .employee-files-layout,
   .product-insight-grid,
-    .account-balance-grid,
-    .settings-grid,
-    .period-controls,
-    .day-nav,
-    .date-filter,
-    .bar-row,
-    .analysis-filter-grid,
-    .analysis-grid,
-    .analysis-bar-row,
-    .ai-bar-row,
-    .analysis-product-row,
-    .finance-header,
-    .finance-sync-panel,
-    .heading-actions,
-    .nav-list,
-    .sidebar-footer {
+  .account-balance-grid,
+  .settings-grid,
+  .period-controls,
+  .day-nav,
+  .date-filter,
+  .bar-row,
+  .analysis-filter-grid,
+  .analysis-grid,
+  .analysis-bar-row,
+  .ai-bar-row,
+  .analysis-product-row,
+  .finance-header,
+  .finance-sync-panel,
+  .heading-actions,
+  .nav-list,
+  .sidebar-footer {
     grid-template-columns: 1fr;
   }
 
@@ -3510,6 +3595,27 @@ a {
     max-height: calc(100dvh - 220px);
     border-inline: 0;
     border-bottom: 0;
+  }
+
+  .schedule-week-horizontal {
+    min-width: calc(136px + var(--timeline-width) + 62px);
+  }
+
+  .schedule-week-horizontal-head,
+  .schedule-week-day-row {
+    grid-template-columns: 136px var(--timeline-width) 62px;
+  }
+
+  .schedule-week-day-label {
+    padding: 10px;
+  }
+
+  .schedule-week-day-label strong {
+    font-size: 0.84rem;
+  }
+
+  .schedule-week-day-label small {
+    font-size: 0.61rem;
   }
 
   .schedule-modal-backdrop {

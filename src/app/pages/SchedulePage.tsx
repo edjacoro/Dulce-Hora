@@ -16,7 +16,7 @@ import {
 import { useMemo, useState } from "react";
 import { api, type ScheduleChangesResponse, type ScheduleChangeValue, type ScheduleResponse, type ScheduleShift } from "../api";
 import { ShiftEditorModal, type ShiftEditorValue } from "../components/ShiftEditorModal";
-import { ScheduleWeekView } from "../components/ScheduleWeekView";
+import { EmployeeFilters, ScheduleWeekView } from "../components/ScheduleWeekView";
 import { downloadSchedulePdf, downloadScheduleWeekPdf } from "../reportPdf";
 
 type EmployeeForm = {
@@ -177,16 +177,42 @@ export function SchedulePage() {
 
   const data = schedule.data;
   const activeEmployees = useMemo(() => data?.employees.filter((employee) => employee.active) ?? [], [data?.employees]);
-  const editorEmployees = useMemo(
-    () => (weekData?.employees ?? activeEmployees).filter((employee) => employee.active),
-    [activeEmployees, weekData?.employees]
+  const monthFilterEmployees = useMemo(
+    () => (data?.employees ?? []).filter((employee) => employee.active || data?.shifts.some((shift) => shift.employeeId === employee.id)),
+    [data?.employees, data?.shifts]
   );
-  const scheduleEmployeeIds = useMemo(() => editorEmployees.map((employee) => employee.id), [editorEmployees]);
-  const visibleEmployeeIds = useMemo(
-    () => scheduleEmployeeIds.filter((id) => !hiddenEmployeeIds.includes(id)),
-    [hiddenEmployeeIds, scheduleEmployeeIds]
+  const weekFilterEmployees = useMemo(
+    () => (weekData?.employees ?? activeEmployees).filter(
+      (employee) => employee.active || weekData?.shifts.some((shift) => shift.employeeId === employee.id)
+    ),
+    [activeEmployees, weekData?.employees, weekData?.shifts]
+  );
+  const editorEmployees = useMemo(
+    () => (activeView === "week" ? weekFilterEmployees : activeEmployees).filter((employee) => employee.active),
+    [activeEmployees, activeView, weekFilterEmployees]
+  );
+  const monthEmployeeIds = useMemo(() => monthFilterEmployees.map((employee) => employee.id), [monthFilterEmployees]);
+  const weekEmployeeIds = useMemo(() => weekFilterEmployees.map((employee) => employee.id), [weekFilterEmployees]);
+  const visibleMonthEmployeeIds = useMemo(
+    () => monthEmployeeIds.filter((id) => !hiddenEmployeeIds.includes(id)),
+    [hiddenEmployeeIds, monthEmployeeIds]
+  );
+  const visibleWeekEmployeeIds = useMemo(
+    () => weekEmployeeIds.filter((id) => !hiddenEmployeeIds.includes(id)),
+    [hiddenEmployeeIds, weekEmployeeIds]
+  );
+  const visibleMonthData = useMemo(
+    () => filterScheduleDataByEmployees(data, visibleMonthEmployeeIds),
+    [data, visibleMonthEmployeeIds]
   );
   const todayDate = useMemo(() => today(), []);
+
+  const updateVisibleEmployees = (scopeIds: string[], visibleIds: string[]) => {
+    setHiddenEmployeeIds((current) => [
+      ...current.filter((id) => !scopeIds.includes(id)),
+      ...scopeIds.filter((id) => !visibleIds.includes(id))
+    ]);
+  };
 
   const openNewShift = (date?: string) => {
     setShiftForm({ ...emptyShift(), date: date ?? (weekDates.includes(todayDate) ? todayDate : weekDates[0]) });
@@ -240,9 +266,9 @@ export function SchedulePage() {
           {activeView === "month" ? (
             <button
               className="secondary-button"
-              disabled={!data}
+              disabled={!visibleMonthData}
               onClick={() => {
-                if (data) void downloadSchedulePdf(data, monthName(month));
+                if (visibleMonthData) void downloadSchedulePdf(visibleMonthData, monthName(month));
               }}
               type="button"
             >
@@ -277,16 +303,29 @@ export function SchedulePage() {
 
       {activeView === "month" ? (
         <>
+      <section className="content-band schedule-month-filters">
+        <div className="table-heading">
+          <div>
+            <h2>Empleados visibles</h2>
+            <p className="muted-text">La pantalla y el PDF incluyen solamente los empleados encendidos.</p>
+          </div>
+        </div>
+        <EmployeeFilters
+          employees={monthFilterEmployees}
+          visibleEmployeeIds={visibleMonthEmployeeIds}
+          onVisibleEmployeeIds={(ids) => updateVisibleEmployees(monthEmployeeIds, ids)}
+        />
+      </section>
       <div className="kpi-grid">
-        <Kpi icon={Users} label="Personas activas" value={data?.summary.employees ?? 0} tone="blue" />
-        <Kpi icon={CalendarDays} label="Turnos" value={data?.summary.shifts ?? 0} tone="green" />
-        <Kpi icon={Clock3} label="Horas del mes" value={formatNumber(data?.summary.hours ?? 0)} tone="slate" />
-        <Kpi icon={Clock3} label="Horas feriado" value={formatNumber(data?.summary.holidayHours ?? 0)} tone="amber" />
-        <Kpi icon={BadgeDollarSign} label="Costo estimado" value={formatCurrency(data?.summary.estimatedCost ?? 0)} tone="red" />
-        <Kpi icon={Trash2} label="Inasistencias" value={data?.summary.absences ?? 0} tone="amber" />
+        <Kpi icon={Users} label="Personas activas" value={visibleMonthData?.summary.employees ?? 0} tone="blue" />
+        <Kpi icon={CalendarDays} label="Turnos" value={visibleMonthData?.summary.shifts ?? 0} tone="green" />
+        <Kpi icon={Clock3} label="Horas del mes" value={formatNumber(visibleMonthData?.summary.hours ?? 0)} tone="slate" />
+        <Kpi icon={Clock3} label="Horas feriado" value={formatNumber(visibleMonthData?.summary.holidayHours ?? 0)} tone="amber" />
+        <Kpi icon={BadgeDollarSign} label="Costo estimado" value={formatCurrency(visibleMonthData?.summary.estimatedCost ?? 0)} tone="red" />
+        <Kpi icon={Trash2} label="Inasistencias" value={visibleMonthData?.summary.absences ?? 0} tone="amber" />
       </div>
 
-      <ScheduleCalendar data={data} month={month} todayDate={todayDate} onAdd={openNewShift} onEdit={openShift} />
+      <ScheduleCalendar data={visibleMonthData} month={month} todayDate={todayDate} onAdd={openNewShift} onEdit={openShift} />
 
       <div className="split-layout schedule-edit-layout">
         <section className="content-band compact-band">
@@ -372,7 +411,7 @@ export function SchedulePage() {
                 </tr>
               </thead>
               <tbody>
-                {(data?.employeeSummary ?? []).map((row) => (
+                {(visibleMonthData?.employeeSummary ?? []).map((row) => (
                   <tr key={row.employeeId}>
                     <td>{row.employeeName}</td>
                     <td>{formatNumber(row.hours)}</td>
@@ -412,7 +451,7 @@ export function SchedulePage() {
             Costo por dia
           </h2>
           <BarList
-            rows={(data?.dailySummary ?? [])
+            rows={(visibleMonthData?.dailySummary ?? [])
               .filter((row) => row.hours > 0 || row.absences > 0)
               .map((row) => ({
                 label: shortDate(row.date),
@@ -430,7 +469,7 @@ export function SchedulePage() {
         </div>
         {schedule.isLoading ? <p className="muted-text">Cargando grilla...</p> : null}
         {schedule.error ? <p className="form-error">{schedule.error.message}</p> : null}
-        {(data?.shifts ?? []).length === 0 ? (
+        {(visibleMonthData?.shifts ?? []).length === 0 ? (
           <div className="dashed-empty">Sin turnos cargados para este mes.</div>
         ) : (
           <div className="data-table-wrap">
@@ -447,7 +486,7 @@ export function SchedulePage() {
                 </tr>
               </thead>
               <tbody>
-                {(data?.shifts ?? []).map((shift) => (
+                {(visibleMonthData?.shifts ?? []).map((shift) => (
                   <tr key={shift.id}>
                     <td>
                       <strong>{shortDate(shift.date)}</strong>
@@ -501,17 +540,17 @@ export function SchedulePage() {
         <ScheduleWeekView
           data={weekData}
           dates={weekDates}
-          employees={editorEmployees}
-          visibleEmployeeIds={visibleEmployeeIds}
+          employees={weekFilterEmployees}
+          visibleEmployeeIds={visibleWeekEmployeeIds}
           loading={weekPrimarySchedule.isLoading || (weekSecondaryMonth !== weekPrimaryMonth && weekSecondarySchedule.isLoading)}
-          onVisibleEmployeeIds={(ids) => setHiddenEmployeeIds(scheduleEmployeeIds.filter((id) => !ids.includes(id)))}
+          onVisibleEmployeeIds={(ids) => updateVisibleEmployees(weekEmployeeIds, ids)}
           onPreviousWeek={() => setWeekAnchor(shiftDate(weekAnchor, -7))}
           onNextWeek={() => setWeekAnchor(shiftDate(weekAnchor, 7))}
           onWeekDate={(date) => setWeekAnchor(startOfWeek(date))}
           onAdd={openNewShift}
           onEdit={openShift}
           onPdf={() => {
-            if (weekData) void downloadScheduleWeekPdf(weekData, weekDates, visibleEmployeeIds);
+            if (weekData) void downloadScheduleWeekPdf(weekData, weekDates, visibleWeekEmployeeIds);
           }}
         />
       ) : null}
@@ -974,6 +1013,52 @@ function mergeScheduleData(primary: ScheduleResponse | undefined, secondary: Sch
     dailySummary,
     holidays: dedupe([...primary.holidays, ...secondary.holidays], (row) => `${row.source}:${row.date}`),
     businessHours: dedupe([...primary.businessHours, ...secondary.businessHours], (row) => row.date),
+    summary: {
+      employees: employees.filter((employee) => employee.active).length,
+      shifts: shifts.length,
+      hours: shifts.reduce((sum, shift) => sum + shift.hours, 0),
+      holidayHours: shifts.filter((shift) => shift.isHoliday).reduce((sum, shift) => sum + shift.hours, 0),
+      absences: shifts.filter((shift) => shift.isAbsence).length,
+      estimatedCost: shifts.reduce((sum, shift) => sum + shift.estimatedCost, 0)
+    }
+  } satisfies ScheduleResponse;
+}
+
+function filterScheduleDataByEmployees(data: ScheduleResponse | undefined, employeeIds: string[]) {
+  if (!data) return undefined;
+  const visible = new Set(employeeIds);
+  const employees = data.employees.filter((employee) => visible.has(employee.id));
+  const shifts = data.shifts.filter((shift) => visible.has(shift.employeeId));
+  const employeeSummary = data.employeeSummary.filter((row) => visible.has(row.employeeId));
+  const dailySummary = data.dailySummary.map((row) => {
+    const dayShifts = shifts.filter((shift) => shift.date === row.date);
+    return {
+      ...row,
+      hours: dayShifts.reduce((sum, shift) => sum + shift.hours, 0),
+      estimatedCost: dayShifts.reduce((sum, shift) => sum + shift.estimatedCost, 0),
+      people: new Set(dayShifts.filter((shift) => !shift.isAbsence).map((shift) => shift.employeeId)).size,
+      holidays: dayShifts.filter((shift) => shift.isHoliday).length,
+      absences: dayShifts.filter((shift) => shift.isAbsence).length
+    };
+  });
+  const holidays = data.holidays.map((holiday) => {
+    const holidayShifts = shifts.filter((shift) => shift.date === holiday.date);
+    return {
+      ...holiday,
+      hours: holidayShifts.reduce((sum, shift) => sum + shift.hours, 0),
+      people: new Set(holidayShifts.filter((shift) => !shift.isAbsence).map((shift) => shift.employeeId)).size,
+      estimatedCost: holidayShifts.reduce((sum, shift) => sum + shift.estimatedCost, 0),
+      shiftCount: holidayShifts.length
+    };
+  });
+
+  return {
+    ...data,
+    employees,
+    shifts,
+    employeeSummary,
+    dailySummary,
+    holidays,
     summary: {
       employees: employees.filter((employee) => employee.active).length,
       shifts: shifts.length,
