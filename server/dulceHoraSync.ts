@@ -1552,8 +1552,9 @@ function formatArgentinaDateTime(date: Date, fallbackDate: string) {
   }).formatToParts(date);
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
 
+  const saleDate = `${get("year")}-${get("month")}-${get("day")}`;
   return {
-    saleDate: `${get("year")}-${get("month")}-${get("day")}` || fallbackDate,
+    saleDate: /^\d{4}-\d{2}-\d{2}$/.test(saleDate) ? saleDate : fallbackDate,
     saleTime: `${get("hour")}:${get("minute")}:${get("second")}`
   };
 }

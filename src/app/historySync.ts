@@ -22,7 +22,6 @@ export type SyncHistoryResult = SyncResult & {
 };
 
 const defaultHistoryStartDate = "2026-04-17";
-const defaultHistoryChunkDays = 7;
 
 export async function syncHistoryInChunks(
   onChunk?: (result: SyncHistoryResult, chunk: { from: string; to: string; index: number; total: number; label?: string }) => void
@@ -56,20 +55,6 @@ export async function syncHistoryInChunks(
   }
 
   return aggregate;
-}
-
-function dateResultToHistory(result: SyncResult): SyncHistoryResult {
-  const hasData = result.recordsReceived > 0 || result.wasteRecordsReceived > 0;
-  const warningsFromErrors = result.errors.filter(isWarningMessage);
-  return {
-    ...result,
-    date: "historial",
-    dateFrom: result.date,
-    dateTo: result.date,
-    datesSynced: hasData ? 1 : 0,
-    errors: result.errors.filter((message) => !isWarningMessage(message)),
-    warnings: [...(result.warnings ?? []), ...warningsFromErrors]
-  };
 }
 
 function mergeHistoryResults(left: SyncHistoryResult, right: SyncHistoryResult): SyncHistoryResult {
@@ -112,44 +97,13 @@ function emptyHistoryResult(): SyncHistoryResult {
   };
 }
 
-function isWarningMessage(message: string) {
-  return (
-    message.includes("se completo la venta desde el listado") ||
-    message.includes("No se pudo leer estadisticas completas") ||
-    message.includes("No se pudieron leer las mermas en esta pasada")
-  );
-}
-
 function uniqueMessages(messages: string[]) {
   return [...new Set(messages)];
-}
-
-function dateChunks(from: string, to: string, size: number) {
-  const chunks: Array<{ from: string; to: string }> = [];
-  let cursor = parseDate(from);
-  const last = parseDate(to);
-
-  while (cursor <= last) {
-    const chunkFrom = formatDate(cursor);
-    const chunkEnd = addDays(cursor, size - 1);
-    const chunkTo = formatDate(chunkEnd <= last ? chunkEnd : last);
-    chunks.push({ from: chunkFrom, to: chunkTo });
-    cursor = addDays(chunkEnd, 1);
-  }
-
-  return chunks;
 }
 
 function historyStartDate() {
   const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
   return env?.VITE_DULCE_HORA_HISTORY_START || defaultHistoryStartDate;
-}
-
-function historyChunkDays() {
-  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
-  const parsed = Number(env?.VITE_DULCE_HORA_HISTORY_CHUNK_DAYS ?? defaultHistoryChunkDays);
-  if (!Number.isFinite(parsed) || parsed <= 0) return defaultHistoryChunkDays;
-  return Math.max(7, Math.floor(parsed));
 }
 
 function todayArgentina() {
@@ -161,21 +115,6 @@ function todayArgentina() {
   }).formatToParts(new Date());
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
-}
-
-function parseDate(value: string) {
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, day));
-}
-
-function addDays(value: Date, days: number) {
-  const next = new Date(value);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
-}
-
-function formatDate(value: Date) {
-  return value.toISOString().slice(0, 10);
 }
 
 function minDate(left: string | null, right: string | null) {

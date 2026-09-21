@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { requireAuth, requireRole } from "./auth.js";
 import { db } from "./db.js";
-import { getDefaultBranch } from "./dulceHoraSync.js";
+import { readBranchScope, readWriteBranch } from "./branchScope.js";
 
 type DateRange = {
   from: string;
@@ -122,6 +122,8 @@ const adjustmentInputSchema = z.object({
 export function registerCashflowRoutes(app: Express) {
   app.get("/api/cashflow/dashboard", requireAuth, async (req, res) => {
     const organizationId = req.user!.organization_id;
+    const scope = await readBranchScope(req, organizationId);
+    const branchId = scope.branchId;
     const month = readMonth(req) ?? todayArgentina().slice(0, 7);
     const range = monthRange(month);
     const salesReadRange = {
@@ -142,15 +144,16 @@ export function registerCashflowRoutes(app: Express) {
          from sales_documents sd
          join branches b on b.id = sd.branch_id
          where b.organization_id = $1
-           and sd.sale_date >= $2
-           and sd.sale_date <= $3
+           and ($2::text is null or b.id = $2)
+           and sd.sale_date >= $3
+           and sd.sale_date <= $4
            and sd.status <> 'credited'
          group by sd.sale_date, sd.payment_method, sd.source,
                   coalesce(sd.raw_data->>'provider', sd.raw_data->>'providerLabel'),
                   sd.raw_data->>'paymentKind',
                   sd.raw_data->>'notes'
          order by sd.sale_date`,
-        [organizationId, salesReadRange.from, salesReadRange.to]
+        [organizationId, branchId, salesReadRange.from, salesReadRange.to]
       ),
       db.query<ExpenseCashRow>(
         `select coalesce(case when e.status = 'paid' then e.paid_date else e.due_date end, e.expense_date)::text as cash_date,
@@ -164,12 +167,13 @@ export function registerCashflowRoutes(app: Express) {
          join branches b on b.id = e.branch_id
          left join expense_categories ec on ec.id = e.category_id
          where b.organization_id = $1
+           and ($2::text is null or b.id = $2)
            and coalesce(ec.pnl_group, 'operating') <> 'capex'
-           and coalesce(case when e.status = 'paid' then e.paid_date else e.due_date end, e.expense_date) <= $2
+           and coalesce(case when e.status = 'paid' then e.paid_date else e.due_date end, e.expense_date) <= $3
          group by coalesce(case when e.status = 'paid' then e.paid_date else e.due_date end, e.expense_date),
                   e.status, e.payment_type, e.payment_method, e.cash_account, coalesce(ec.name, 'Sin categoria')
          order by cash_date`,
-        [organizationId, range.to]
+        [organizationId, branchId, range.to]
       ),
       db.query<WithdrawalCashRow>(
         `select pw.withdrawal_date::text as withdrawal_date,
@@ -182,10 +186,11 @@ export function registerCashflowRoutes(app: Express) {
          join branches b on b.id = pw.branch_id
          join investors i on i.id = pw.investor_id
          where b.organization_id = $1
-           and pw.withdrawal_date <= $2
+           and ($2::text is null or b.id = $2)
+           and pw.withdrawal_date <= $3
          group by pw.withdrawal_date, pw.status, pw.payment_method, pw.cash_account, i.name
          order by pw.withdrawal_date`,
-        [organizationId, range.to]
+        [organizationId, branchId, range.to]
       ),
       db.query<TransferRow>(
         `select ct.id,
@@ -197,9 +202,10 @@ export function registerCashflowRoutes(app: Express) {
          from cashflow_transfers ct
          join branches b on b.id = ct.branch_id
          where b.organization_id = $1
-           and ct.transfer_date <= $2
+           and ($2::text is null or b.id = $2)
+           and ct.transfer_date <= $3
          order by ct.transfer_date desc, ct.created_at desc`,
-        [organizationId, range.to]
+        [organizationId, branchId, range.to]
       ),
       db.query<AdjustmentRow>(
         `select ca.id,
@@ -210,9 +216,10 @@ export function registerCashflowRoutes(app: Express) {
          from cashflow_account_adjustments ca
          join branches b on b.id = ca.branch_id
          where b.organization_id = $1
-           and ca.adjustment_date <= $2
+           and ($2::text is null or b.id = $2)
+           and ca.adjustment_date <= $3
          order by ca.adjustment_date desc, ca.created_at desc`,
-        [organizationId, range.to]
+        [organizationId, branchId, range.to]
       )
     ]);
 
@@ -365,7 +372,7 @@ export function registerCashflowRoutes(app: Express) {
       res.status(400).json({ error: "Las cuentas del pase deben ser distintas" });
       return;
     }
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id);
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para cargar pases" });
       return;
@@ -400,7 +407,7 @@ export function registerCashflowRoutes(app: Express) {
 
   app.post("/api/cashflow/adjustments", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
     const input = adjustmentInputSchema.parse(req.body ?? {});
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id);
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para ajustar saldos" });
       return;

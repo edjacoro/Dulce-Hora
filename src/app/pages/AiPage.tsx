@@ -18,9 +18,9 @@ type AiAnswer = {
 
 const suggestions = [
   "Top 10 productos del mes",
-  "Que cafes se vendieron mas este mes",
-  "Cual es la hora mas fuerte por ventas",
-  "Que productos tienen mas merma",
+  "Que productos no se vendieron en este mes",
+  "Cual es la hora y el dia mas fuerte",
+  "Como fue el ticket promedio y los articulos por ticket",
   "Comparar ventas por empleado"
 ];
 
@@ -57,9 +57,9 @@ export function AiPage() {
     <section className="page-section ai-page">
       <div className="page-heading">
         <div>
-          <span className="eyebrow">IA local</span>
-          <h1>IA</h1>
-          <p>Preguntas rapidas sobre ventas, productos, horarios y empleados con datos de Neon.</p>
+          <span className="eyebrow">Consulta local verificada</span>
+          <h1>Asistente de datos</h1>
+          <p>Consulta ventas, productos, horarios y empleados usando exclusivamente los datos guardados en Neon.</p>
         </div>
         <div className="ai-range-controls">
           <label>
@@ -77,8 +77,8 @@ export function AiPage() {
         <div className="ai-prompt-head">
           <div>
             <BrainCircuit size={22} aria-hidden="true" />
-            <strong>Consulta inteligente</strong>
-            <small>No inventa datos: responde con lo cargado en la app.</small>
+            <strong>Pregunta sobre el negocio</strong>
+            <small>Interpreta palabras y sinonimos; no completa datos faltantes.</small>
           </div>
         </div>
         <form
@@ -92,7 +92,7 @@ export function AiPage() {
           <textarea
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
-            placeholder="Ej: Que productos conviene revisar por merma este mes?"
+            placeholder="Ej: Cuantos pan de queso se vendieron y en que horario?"
             rows={3}
           />
           <button className="primary-button" type="submit">
@@ -160,6 +160,67 @@ function buildAnswer(
 
   const question = normalize(rawQuestion);
 
+  if (
+    question.includes("no se vend") ||
+    question.includes("sin venta") ||
+    question.includes("sin movimiento") ||
+    question.includes("descontinu") ||
+    question.includes("baja rotacion")
+  ) {
+    const rows = employees.noSaleProducts.slice(0, 12);
+    return {
+      title: "Productos sin movimiento",
+      metricLabel: "Sin ventas en el rango",
+      text: rows.length
+        ? `Hay ${formatInteger(employees.noSaleProducts.length)} productos del catalogo sin ventas en el periodo. Los primeros del listado son los que conviene revisar antes de discontinuar o activar con una accion comercial.`
+        : "Todos los productos activos del catalogo tuvieron alguna venta en el periodo seleccionado.",
+      bars: rows.map((row, index) => ({
+        label: row.label,
+        value: Math.max(1, rows.length - index),
+        detail: row.lastSaleDate ? `Ultima venta: ${shortDate(row.lastSaleDate)}` : "Sin venta historica visible"
+      }))
+    };
+  }
+
+  if (question.includes("articulo por ticket") || question.includes("articulos por ticket") || question.includes("unidades por ticket")) {
+    return {
+      title: "Articulos por ticket",
+      metricLabel: "Promedio del rango",
+      text: `Se registraron ${formatNumber(employees.summary.unitsPerTicket)} articulos por ticket sobre ${formatInteger(employees.summary.tickets)} comprobantes con la cobertura disponible.`,
+      bars: hours.weekdays.filter((row) => row.tickets > 0).map((row) => ({
+        label: row.label,
+        value: row.unitsPerTicket,
+        detail: `${formatInteger(row.tickets)} tickets`
+      }))
+    };
+  }
+
+  if (question.includes("ticket promedio") || question.includes("promedio por ticket") || question.includes("gasto promedio")) {
+    return {
+      title: "Ticket promedio",
+      metricLabel: "Importe promedio",
+      text: `El ticket promedio del periodo es ${formatCurrency(employees.summary.averageTicket)}, calculado sobre ${formatInteger(employees.summary.tickets)} tickets.`,
+      bars: hours.weekdays.filter((row) => row.tickets > 0).map((row) => ({
+        label: row.label,
+        value: row.averageTicket,
+        detail: `${formatInteger(row.tickets)} tickets`
+      }))
+    };
+  }
+
+  if (question.includes("comprobante") || question.includes("pedido") || question.includes("ticket")) {
+    return {
+      title: "Comprobantes y pedidos",
+      metricLabel: "Tickets",
+      text: `En el rango hay ${formatInteger(employees.summary.documents)} comprobantes y ${formatInteger(employees.summary.tickets)} tickets de venta activos.`,
+      bars: hours.weekdays.filter((row) => row.tickets > 0).map((row) => ({
+        label: row.label,
+        value: row.tickets,
+        detail: formatCurrency(row.revenue)
+      }))
+    };
+  }
+
   if (question.includes("empleado") || question.includes("persona") || question.includes("turno")) {
     const rows = employees.segments.filter((row) => row.tickets > 0).slice(0, 8);
     const leader = rows[0];
@@ -190,6 +251,23 @@ function buildAnswer(
         label: row.label,
         value: row.revenue,
         detail: `${formatInteger(row.tickets)} tickets`
+      }))
+    };
+  }
+
+  if (question.includes("dia") || question.includes("semana") || question.includes("fecha")) {
+    const rows = [...hours.weekdays].filter((row) => row.tickets > 0).sort((a, b) => b.revenuePerDay - a.revenuePerDay);
+    const leader = rows[0];
+    return {
+      title: "Dias fuertes",
+      metricLabel: "Venta promedio por dia",
+      text: leader
+        ? `${leader.label} es el dia de semana mas fuerte, con ${formatCurrency(leader.revenuePerDay)} de venta promedio y ${formatNumber(leader.ticketsPerDay)} tickets por jornada observada.`
+        : "No hay dias con ventas suficientes en el periodo.",
+      bars: rows.map((row) => ({
+        label: row.label,
+        value: row.revenuePerDay,
+        detail: `${formatNumber(row.ticketsPerDay)} tickets/dia`
       }))
     };
   }
@@ -230,6 +308,30 @@ function buildAnswer(
         label: row.label,
         value: row.quantitySold,
         detail: formatCurrency(row.revenue)
+      }))
+    };
+  }
+
+  const mentionedProducts = products.products
+    .filter((row) => {
+      const label = normalize(row.label);
+      return label.length >= 4 && question.includes(label);
+    })
+    .sort((a, b) => b.label.length - a.label.length)
+    .slice(0, question.includes("compar") ? 5 : 1);
+  if (mentionedProducts.length > 0) {
+    const totalUnits = mentionedProducts.reduce((total, row) => total + row.quantitySold, 0);
+    const totalRevenue = mentionedProducts.reduce((total, row) => total + row.revenue, 0);
+    return {
+      title: mentionedProducts.length > 1 ? "Comparacion de productos" : mentionedProducts[0].label,
+      metricLabel: "Articulos vendidos",
+      text: mentionedProducts.length > 1
+        ? `Los productos encontrados suman ${formatNumber(totalUnits)} articulos y ${formatCurrency(totalRevenue)} de venta en el rango.`
+        : `${mentionedProducts[0].label} registro ${formatNumber(totalUnits)} articulos, ${formatCurrency(totalRevenue)} de venta y presencia en ${formatInteger(mentionedProducts[0].tickets)} tickets.`,
+      bars: mentionedProducts.map((row) => ({
+        label: row.label,
+        value: row.quantitySold,
+        detail: `${formatCurrency(row.revenue)} - ${formatInteger(row.tickets)} tickets`
       }))
     };
   }

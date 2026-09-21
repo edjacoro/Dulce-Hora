@@ -576,10 +576,6 @@ function today() {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
-function monthStart() {
-  return `${today().slice(0, 8)}01`;
-}
-
 function shiftDate(value: string, delta: number) {
   const [year, month, day] = value.split("-").map(Number);
   const date = new Date(year, month - 1, day + delta);

@@ -17,29 +17,29 @@ import {
   Trash2,
   X
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api, type DashboardOverview, type MeResponse, type ScheduleResponse, type SetupStatus } from "./api";
 import { dulceHoraLogo } from "./brand";
-import { AiPage } from "./pages/AiPage";
-import { AnalysisPage } from "./pages/AnalysisPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { CashflowPage } from "./pages/CashflowPage";
-import { EmployeeFilesPage } from "./pages/EmployeeFilesPage";
-import { ExpensesPage } from "./pages/ExpensesPage";
-import { FinancePage } from "./pages/FinancePage";
-import { HoursPage } from "./pages/HoursPage";
-import { IntegrationPage } from "./pages/IntegrationPage";
 import { LoginPage } from "./pages/LoginPage";
-import { ProductsPage } from "./pages/ProductsPage";
-import { SchedulePage } from "./pages/SchedulePage";
-import { SalesPage } from "./pages/SalesPage";
-import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
-import { WastePage } from "./pages/WastePage";
-import { canRunDulceHoraDateSyncFromThisHost } from "./runtime";
-import { hydrateDulceHoraDetailsUntilDone, invalidateDulceHoraReporting } from "./dulceHoraDetails";
 import { DulceHoraImportJobBanner, DulceHoraImportJobProvider } from "./dulceHoraImportJob";
+import { BranchScopeProvider, formatBranchName, useBranchScope } from "./branchScope";
+
+const AiPage = lazy(() => import("./pages/AiPage").then((module) => ({ default: module.AiPage })));
+const AnalysisPage = lazy(() => import("./pages/AnalysisPage").then((module) => ({ default: module.AnalysisPage })));
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
+const CashflowPage = lazy(() => import("./pages/CashflowPage").then((module) => ({ default: module.CashflowPage })));
+const EmployeeFilesPage = lazy(() => import("./pages/EmployeeFilesPage").then((module) => ({ default: module.EmployeeFilesPage })));
+const ExpensesPage = lazy(() => import("./pages/ExpensesPage").then((module) => ({ default: module.ExpensesPage })));
+const FinancePage = lazy(() => import("./pages/FinancePage").then((module) => ({ default: module.FinancePage })));
+const HoursPage = lazy(() => import("./pages/HoursPage").then((module) => ({ default: module.HoursPage })));
+const IntegrationPage = lazy(() => import("./pages/IntegrationPage").then((module) => ({ default: module.IntegrationPage })));
+const ProductsPage = lazy(() => import("./pages/ProductsPage").then((module) => ({ default: module.ProductsPage })));
+const SchedulePage = lazy(() => import("./pages/SchedulePage").then((module) => ({ default: module.SchedulePage })));
+const SalesPage = lazy(() => import("./pages/SalesPage").then((module) => ({ default: module.SalesPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
+const WastePage = lazy(() => import("./pages/WastePage").then((module) => ({ default: module.WastePage })));
 
 const navItems = [
   { to: "/", label: "Inicio", icon: Home },
@@ -51,7 +51,7 @@ const navItems = [
   { to: "/finanzas", label: "Finanzas", icon: LineChart },
   { to: "/cashflow", label: "Cashflow", icon: Landmark },
   { to: "/analisis", label: "Analisis", icon: BarChart3 },
-  { to: "/ia", label: "IA", icon: BrainCircuit },
+  { to: "/ia", label: "Asistente", icon: BrainCircuit },
   { to: "/importaciones", label: "Importaciones", icon: FileSpreadsheet },
   { to: "/ajustes", label: "Ajustes", icon: Settings }
 ];
@@ -65,7 +65,6 @@ export function App() {
   const queryClient = useQueryClient();
   const location = useLocation();
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
-  const canRunDulceHoraTodaySync = canRunDulceHoraDateSyncFromThisHost(todayArgentina());
   const setup = useQuery({
     queryKey: ["setup-status"],
     queryFn: () => api<SetupStatus>("/api/setup/status")
@@ -123,55 +122,6 @@ export function App() {
     autoExpensesImport.mutate();
   }, [autoExpensesImport, me.data, overview.data]);
 
-  useEffect(() => {
-    if (!canRunDulceHoraTodaySync || !me.data) return;
-
-    let cancelled = false;
-    let running = false;
-
-    const syncToday = async () => {
-      if (running) return;
-      running = true;
-      const syncDate = todayArgentina();
-      try {
-        await api("/api/integration/dulce-hora/sync-date", {
-          method: "POST",
-          body: JSON.stringify({ date: syncDate, includeWaste: false, includeStatistics: false })
-        });
-        if (!cancelled) {
-          await invalidateDulceHoraReporting(queryClient);
-        }
-        void hydrateDulceHoraDetailsUntilDone({
-          date: syncDate,
-          queryClient,
-          limit: 6,
-          maxRuns: 8,
-          shouldContinue: () => !cancelled
-        }).catch((error) => {
-          console.warn("[dulce-hora] No se pudo completar productos automaticamente", error);
-        });
-      } catch (error) {
-        console.warn("[dulce-hora] No se pudo sincronizar automaticamente el dia", error);
-      } finally {
-        running = false;
-      }
-    };
-
-    void syncToday();
-    const intervalId = window.setInterval(() => {
-      void syncToday();
-    }, 15 * 60 * 1000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [canRunDulceHoraTodaySync, me.data, queryClient]);
-
-  useEffect(() => {
-    setMobileMoreOpen(false);
-  }, [location.pathname]);
-
   if (setup.isLoading) {
     return <Splash text="Preparando Dulce Hora Control" />;
   }
@@ -193,6 +143,7 @@ export function App() {
   }
 
   return (
+    <BranchScopeProvider branches={me.data.branches}>
     <div className="app-frame">
       <aside className="sidebar">
         <div className="brand">
@@ -244,15 +195,15 @@ export function App() {
             <img className="topbar-logo" src={dulceHoraLogo} alt="" />
             <div>
               <strong>{me.data.organization.name}</strong>
-              <small>
-                {branchDisplayName(me.data.branches[0]?.name)} - {me.data.organization.currency}
-              </small>
+              <BranchScopeLabel currency={me.data.organization.currency} />
             </div>
+            <BranchScopeSelector />
           </header>
 
           <div className="main-content">
             <DulceHoraImportJobBanner />
 
+            <Suspense fallback={<PageLoading />}>
             <Routes>
               <Route path="/" element={<DashboardPage />} />
               <Route path="/ventas" element={<SalesPage />} />
@@ -270,6 +221,7 @@ export function App() {
               <Route path="/ajustes" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
+            </Suspense>
           </div>
         </DulceHoraImportJobProvider>
       </main>
@@ -286,7 +238,7 @@ export function App() {
             <div className="mobile-more-header">
               <div>
                 <strong>Mas secciones</strong>
-                <small>{branchDisplayName(me.data.branches[0]?.name)}</small>
+                <small>{formatBranchName(me.data.branches[0]?.name)}</small>
               </div>
               <button className="icon-only-button" onClick={() => setMobileMoreOpen(false)} type="button" aria-label="Cerrar">
                 <X size={18} aria-hidden="true" />
@@ -301,6 +253,7 @@ export function App() {
                   key={item.to}
                   to={item.to}
                   end={item.to === "/"}
+                  onClick={() => setMobileMoreOpen(false)}
                 >
                   <item.icon size={18} aria-hidden="true" />
                   <span>{item.label}</span>
@@ -335,6 +288,7 @@ export function App() {
             key={item.to}
             to={item.to}
             end={item.to === "/"}
+            onClick={() => setMobileMoreOpen(false)}
           >
             <item.icon size={19} aria-hidden="true" />
             <span>{item.label}</span>
@@ -350,7 +304,33 @@ export function App() {
         </button>
       </nav>
     </div>
+    </BranchScopeProvider>
   );
+}
+
+function BranchScopeLabel({ currency }: { currency: string }) {
+  const { branchName } = useBranchScope();
+  return <small>{branchName} - {currency}</small>;
+}
+
+function BranchScopeSelector() {
+  const { branchId, branches, setBranchId } = useBranchScope();
+  return (
+    <label className="branch-scope-selector">
+      <span>Sucursal</span>
+      <select value={branchId} onChange={(event) => setBranchId(event.target.value)}>
+        {branches.map((branch) => (
+          <option key={branch.id} value={branch.id}>{formatBranchName(branch.name)}</option>
+        ))}
+        {branches.length < 2 ? <option value="pending" disabled>Segunda sucursal - pendiente</option> : null}
+        <option value="all">Consolidado</option>
+      </select>
+    </label>
+  );
+}
+
+function PageLoading() {
+  return <div className="page-loading" role="status">Cargando seccion...</div>;
 }
 
 function isSalesSectionActive(itemPath: string, currentPath: string) {
@@ -365,11 +345,6 @@ function isMobileNavActive(itemPath: string, currentPath: string) {
 
 function isMobileMoreActive(currentPath: string) {
   return !mobilePrimaryNavItems.some((item) => isMobileNavActive(item.to, currentPath));
-}
-
-function branchDisplayName(name: string | undefined) {
-  if (!name) return "JURAMENTO - Villa Urquiza";
-  return name.toLowerCase().includes("juramento") ? name : `JURAMENTO - ${name}`;
 }
 
 function Splash({ text }: { text: string }) {
@@ -401,15 +376,4 @@ function currentMonthArgentina() {
   }).formatToParts(new Date());
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}`;
-}
-
-function todayArgentina() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Argentina/Buenos_Aires",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(new Date());
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
 }

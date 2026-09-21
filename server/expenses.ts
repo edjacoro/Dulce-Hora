@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { z } from "zod";
 import { requireAuth, requireRole } from "./auth.js";
 import { db } from "./db.js";
-import { getDefaultBranch } from "./dulceHoraSync.js";
+import { addBranchScopeFilter, readBranchScope, readWriteBranch } from "./branchScope.js";
 
 type DateRange = {
   from: string | null;
@@ -133,6 +133,8 @@ export function registerExpenseRoutes(app: Express) {
     const range = readDateRange(req);
     const params: unknown[] = [req.user!.organization_id];
     const filters = ["b.organization_id = $1", "coalesce(ec.pnl_group, 'operating') <> 'capex'"];
+    const scope = await readBranchScope(req, req.user!.organization_id);
+    addBranchScopeFilter(filters, params, "b.id", scope);
     addAccountingRangeFilter(filters, params, range);
 
     const rows = await db.query(
@@ -231,7 +233,7 @@ export function registerExpenseRoutes(app: Express) {
 
   app.post("/api/expenses", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
     const input = expenseInputSchema.parse(req.body);
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id);
 
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para cargar gastos" });
@@ -406,6 +408,11 @@ export function registerExpenseRoutes(app: Express) {
 
   app.get("/api/profit-withdrawals", requireAuth, async (req, res) => {
     const month = readMonth(req) ?? todayArgentina().slice(0, 7);
+    const scope = await readBranchScope(req, req.user!.organization_id);
+    const params: unknown[] = [req.user!.organization_id];
+    const filters = ["b.organization_id = $1"];
+    addBranchScopeFilter(filters, params, "b.id", scope);
+    params.push(month);
     const rows = await db.query(
       `select pw.id,
               pw.withdrawal_month,
@@ -421,10 +428,10 @@ export function registerExpenseRoutes(app: Express) {
        from profit_withdrawals pw
        join branches b on b.id = pw.branch_id
        join investors i on i.id = pw.investor_id
-       where b.organization_id = $1
-         and pw.withdrawal_month = $2
+       where ${filters.join(" and ")}
+         and pw.withdrawal_month = $${params.length}
        order by pw.withdrawal_date desc, i.name`,
-      [req.user!.organization_id, month]
+      params
     );
 
     const summary = await db.query<{ status: string; total: string; records: string }>(
@@ -433,10 +440,10 @@ export function registerExpenseRoutes(app: Express) {
               count(pw.id)::text as records
        from profit_withdrawals pw
        join branches b on b.id = pw.branch_id
-       where b.organization_id = $1
-         and pw.withdrawal_month = $2
+       where ${filters.join(" and ")}
+         and pw.withdrawal_month = $${params.length}
        group by pw.status`,
-      [req.user!.organization_id, month]
+      params
     );
 
     res.json({
@@ -453,7 +460,7 @@ export function registerExpenseRoutes(app: Express) {
 
   app.post("/api/profit-withdrawals", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
     const input = withdrawalInputSchema.parse(req.body ?? {});
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id);
     await ensureDefaultInvestors(req.user!.organization_id);
 
     if (!branch) {
@@ -537,7 +544,7 @@ export function registerExpenseRoutes(app: Express) {
 
   app.post("/api/imports/expenses-sheet", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
     const input = expenseImportSchema.parse(req.body ?? {});
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id);
 
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para importar gastos" });
@@ -653,17 +660,6 @@ function readDateRange(req: Request): DateRange {
   return { from, to };
 }
 
-function addDateRangeFilter(filters: string[], params: unknown[], column: string, range: DateRange) {
-  if (range.from) {
-    params.push(range.from);
-    filters.push(`${column} >= $${params.length}`);
-  }
-  if (range.to) {
-    params.push(range.to);
-    filters.push(`${column} <= $${params.length}`);
-  }
-}
-
 function addAccountingRangeFilter(filters: string[], params: unknown[], range: DateRange) {
   if (range.from) {
     params.push(range.from.slice(0, 7));
@@ -711,41 +707,6 @@ function prepareImportedExpense(input: ParsedExpense) {
     dueDate,
     cashAccount: defaultCashAccountForPayment(input.paymentMethod, input.paymentType)
   };
-}
-
-async function findExistingImportedExpense(queryable: Queryable, branchId: string, row: ParsedExpense) {
-  const externalIds = [row.externalId, ...row.legacyExternalIds];
-  const byExternalId = await queryable.query<{ id: string }>(
-    `select id
-     from expenses
-     where branch_id = $1
-       and source = 'google-sheet-expenses'
-       and external_id = any($2::text[])
-     limit 1`,
-    [branchId, externalIds]
-  );
-
-  if (byExternalId.rows[0]) return byExternalId.rows[0];
-
-  const byContent = await queryable.query<{ id: string }>(
-    `select e.id
-     from expenses e
-     left join expense_categories ec on ec.id = e.category_id
-     where e.branch_id = $1
-       and e.source = 'google-sheet-expenses'
-       and (
-         coalesce(e.accounting_month, substring(e.expense_date::text from 1 for 7)) = $2
-         or e.expense_date = $3
-       )
-       and lower(coalesce(ec.name, '')) = lower($4)
-       and abs(e.amount - $5) < 0.01
-       and coalesce(e.description, '') = $6
-     order by e.created_at desc
-     limit 1`,
-    [branchId, row.accountingMonth, row.expenseDate, row.categoryName, row.amount, row.description || ""]
-  );
-
-  return byContent.rows[0] ?? null;
 }
 
 function summarizeParsedExpenses(rows: ParsedExpense[]) {

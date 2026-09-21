@@ -13,8 +13,10 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api, type DashboardOverview, type FinanceDashboard, type MeResponse, type SalesSummary } from "../api";
+import { useBranchScope } from "../branchScope";
 
 export function DashboardPage() {
+  const branchScope = useBranchScope();
   const me = useQuery({
     queryKey: ["me"],
     queryFn: () => api<MeResponse>("/api/auth/me")
@@ -36,7 +38,6 @@ export function DashboardPage() {
 
   const counts = overview.data?.counts;
   const user = me.data?.user;
-  const branchName = branchDisplayName(me.data?.branches[0]?.name);
   const daySummary = todaySales.data?.summary;
   const ticketsPerHour = ticketsPerOperatingHour(day, daySummary?.tickets ?? 0);
   const projection = finance.data?.summary.projection ?? 0;
@@ -51,13 +52,7 @@ export function DashboardPage() {
         </div>
         <div className="dashboard-branch-panel">
           <span>Sucursal activa</span>
-          <div className="branch-selector">
-            <label>
-              <select value="juramento" onChange={() => undefined}>
-                <option value="juramento">{branchName}</option>
-              </select>
-            </label>
-          </div>
+          <strong>{branchScope.branchName}</strong>
           <small>ARS - Base online</small>
         </div>
       </div>
@@ -65,6 +60,7 @@ export function DashboardPage() {
       <div className="kpi-grid dashboard-priority-grid">
         <Kpi icon={BadgeDollarSign} label="Venta hoy" value={formatCurrency(daySummary?.netSales ?? 0)} tone="red" />
         <Kpi icon={Clock3} label="Tickets por hora" value={formatNumber(ticketsPerHour)} tone="blue" />
+        <Kpi icon={Database} label="Comprobantes hoy" value={daySummary?.documents ?? 0} tone="slate" />
         <Kpi icon={BarChart3} label="Ticket promedio" value={formatCurrency(daySummary?.averageTicket ?? 0)} tone="green" />
         <Kpi icon={TrendingUp} label="Proyeccion mes" value={formatCurrency(projection)} tone="amber" />
       </div>
@@ -88,6 +84,12 @@ export function DashboardPage() {
           <Status icon={FileSpreadsheet} label="Importaciones" value={counts?.imports ?? 0} />
           <Status icon={Trash2} label="Mermas" value={counts?.wasteRecords ?? 0} />
         </div>
+        <p className="dashboard-sync-health">
+          Productos del dia: {formatPercent(overview.data?.health.detailCoverage ?? 1)} completos
+          {overview.data?.health.lastSuccessfulSyncAt
+            ? ` - Ultima sincronizacion: ${formatDateTime(overview.data.health.lastSuccessfulSyncAt)}`
+            : " - Sin sincronizaciones registradas"}
+        </p>
       </div>
     </section>
   );
@@ -141,11 +143,6 @@ function Status({ icon: Icon, label, value }: { icon: React.ElementType; label: 
       <small>{label}</small>
     </span>
   );
-}
-
-function branchDisplayName(name: string | undefined) {
-  if (!name) return "JURAMENTO - Villa Urquiza";
-  return name.toLowerCase().includes("juramento") ? name : `JURAMENTO - ${name}`;
 }
 
 function today() {
@@ -213,4 +210,15 @@ function formatCurrency(value: number) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("es-AR", { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatPercent(value: number) {
+  return new Intl.NumberFormat("es-AR", { style: "percent", maximumFractionDigits: 0 }).format(value);
+}
+
+function formatDateTime(value: string) {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : new Intl.DateTimeFormat("es-AR", { dateStyle: "short", timeStyle: "short" }).format(parsed);
 }

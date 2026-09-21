@@ -788,21 +788,6 @@ function dateQuery(from: string, to: string) {
   return value ? `?${value}` : "";
 }
 
-function today() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Argentina/Buenos_Aires",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function monthStart() {
-  return `${today().slice(0, 8)}01`;
-}
-
 function monthRange(month: string) {
   const [year, monthNumber] = month.split("-").map(Number);
   const days = new Date(year, monthNumber, 0).getDate();

@@ -13,7 +13,6 @@ import {
 import { db, migrate, queryOne } from "./db.js";
 import { dulceHoraCredentialsConfigured } from "./dulceHoraClient.js";
 import {
-  getDefaultBranch,
   hydrateDulceHoraDateDetails,
   syncDulceHoraDate,
   syncDulceHoraHistory,
@@ -23,6 +22,7 @@ import { registerCashflowRoutes } from "./cashflow.js";
 import { registerExpenseRoutes } from "./expenses.js";
 import { registerFinanceRoutes } from "./finance.js";
 import { ensureDefaultScheduleCoverage, registerScheduleRoutes } from "./schedule.js";
+import { addBranchScopeFilter, readBranchScope, readWriteBranch } from "./branchScope.js";
 
 export const app = express();
 const port = Number(process.env.PORT ?? 8787);
@@ -142,6 +142,9 @@ const corporateSaleSchema = z.object({
   total: z.number().positive(),
   paymentMethod: z.enum(["efectivo", "virtual", "credito", "debito", "otro"]).optional().default("virtual"),
   notes: z.string().trim().max(500).optional().default("")
+});
+const productCostSchema = z.object({
+  cost: z.number().min(0).max(100_000_000).nullable()
 });
 
 type DateRange = {
@@ -407,6 +410,9 @@ app.get("/api/auth/me", requireAuth, async (req, res) => {
 
 app.get("/api/dashboard/overview", requireAuth, async (req, res) => {
   const organizationId = req.user!.organization_id;
+  const scope = await readBranchScope(req, organizationId);
+  const branchClause = scope.branchId ? "and b.id = $2" : "";
+  const branchParams = scope.branchId ? [organizationId, scope.branchId] : [organizationId];
   const counts = await queryOne<{
     branches: string;
     users: string;
@@ -421,20 +427,50 @@ app.get("/api/dashboard/overview", requireAuth, async (req, res) => {
     `select
       (select count(*)::text from branches where organization_id = $1) as branches,
       (select count(*)::text from users where organization_id = $1) as users,
-      (select count(*)::text from sales_documents sd join branches b on b.id = sd.branch_id where b.organization_id = $1) as sales_documents,
-      (select count(*)::text from sale_items si join sales_documents sd on sd.id = si.sales_document_id join branches b on b.id = sd.branch_id where b.organization_id = $1) as sale_items,
-      (select count(*)::text from imports i join branches b on b.id = i.branch_id where b.organization_id = $1) as imports,
-      (select count(*)::text from sync_runs sr join branches b on b.id = sr.branch_id where b.organization_id = $1) as sync_runs,
+      (select count(*)::text from sales_documents sd join branches b on b.id = sd.branch_id where b.organization_id = $1 ${branchClause}) as sales_documents,
+      (select count(*)::text from sale_items si join sales_documents sd on sd.id = si.sales_document_id join branches b on b.id = sd.branch_id where b.organization_id = $1 ${branchClause}) as sale_items,
+      (select count(*)::text from imports i join branches b on b.id = i.branch_id where b.organization_id = $1 ${branchClause}) as imports,
+      (select count(*)::text from sync_runs sr join branches b on b.id = sr.branch_id where b.organization_id = $1 ${branchClause}) as sync_runs,
       (select count(*)::text from products where organization_id = $1) as products,
       (select count(*)::text from waste_records wr join branches b on b.id = wr.branch_id where b.organization_id = $1) as waste_records,
       (select count(*)::text
        from expenses e
        join branches b on b.id = e.branch_id
        left join expense_categories ec on ec.id = e.category_id
-       where b.organization_id = $1
+       where b.organization_id = $1 ${branchClause}
          and coalesce(ec.pnl_group, 'operating') <> 'capex') as expenses`,
-    [organizationId]
+    branchParams
   );
+
+  const health = await queryOne<{
+    documents_today: string;
+    detailed_today: string;
+    last_success_at: string | null;
+  }>(
+    `select
+       (select count(*)::text
+        from sales_documents sd
+        join branches b on b.id = sd.branch_id
+        where b.organization_id = $1 ${branchClause}
+          and sd.sale_date = $${branchParams.length + 1}
+          and sd.status = 'active') as documents_today,
+       (select count(distinct sd.id)::text
+        from sales_documents sd
+        join branches b on b.id = sd.branch_id
+        join sale_items si on si.sales_document_id = sd.id
+        where b.organization_id = $1 ${branchClause}
+          and sd.sale_date = $${branchParams.length + 1}
+          and sd.status = 'active') as detailed_today,
+       (select max(sr.finished_at)::text
+        from sync_runs sr
+        join branches b on b.id = sr.branch_id
+        where b.organization_id = $1 ${branchClause}
+          and sr.status = 'success') as last_success_at`,
+    [...branchParams, todayArgentinaDate()]
+  );
+
+  const documentsToday = Number(health?.documents_today ?? 0);
+  const detailedToday = Number(health?.detailed_today ?? 0);
 
   res.json({
     counts: {
@@ -447,6 +483,12 @@ app.get("/api/dashboard/overview", requireAuth, async (req, res) => {
       products: Number(counts?.products ?? 0),
       wasteRecords: Number(counts?.waste_records ?? 0),
       expenses: Number(counts?.expenses ?? 0)
+    },
+    health: {
+      documentsToday,
+      detailedToday,
+      detailCoverage: documentsToday > 0 ? detailedToday / documentsToday : 1,
+      lastSuccessfulSyncAt: health?.last_success_at ?? null
     },
     dataStatus:
       Number(counts?.sales_documents ?? 0) === 0
@@ -512,6 +554,8 @@ app.get("/api/sales/documents", requireAuth, async (req, res) => {
   const range = readDateRange(req);
   const params: unknown[] = [req.user!.organization_id];
   const filters = ["b.organization_id = $1"];
+  const scope = await readBranchScope(req, req.user!.organization_id);
+  addBranchScopeFilter(filters, params, "b.id", scope);
   addDateRangeFilter(filters, params, "sd.sale_date", range);
   params.push(limit);
 
@@ -546,6 +590,8 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
   const range = readDateRange(req);
   const params: unknown[] = [req.user!.organization_id];
   const filters = ["b.organization_id = $1"];
+  const scope = await readBranchScope(req, req.user!.organization_id);
+  addBranchScopeFilter(filters, params, "b.id", scope);
   addDateRangeFilter(filters, params, "sd.sale_date", range);
   const where = filters.join(" and ");
   const netTotal = "case when sd.status = 'credit_note' then -abs(sd.total) else sd.total end";
@@ -697,7 +743,7 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
 
 app.post("/api/sales/corporate", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
   const input = corporateSaleSchema.parse(req.body ?? {});
-  const branch = await getDefaultBranch(req.user!.organization_id);
+  const branch = await readWriteBranch(req, req.user!.organization_id);
 
   if (!branch) {
     res.status(400).json({ error: "No hay una sucursal activa para cargar ventas corporativas" });
@@ -750,13 +796,15 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
 
   const salesParams: unknown[] = [organizationId];
   const salesFilters = ["b.organization_id = $1", "sd.status = 'active'"];
+  const scope = await readBranchScope(req, organizationId);
+  addBranchScopeFilter(salesFilters, salesParams, "b.id", scope);
   addDateRangeFilter(salesFilters, salesParams, "sd.sale_date", range);
 
   const wasteParams: unknown[] = [organizationId];
   const wasteFilters = ["b.organization_id = $1"];
+  addBranchScopeFilter(wasteFilters, wasteParams, "b.id", scope);
   addDateRangeFilter(wasteFilters, wasteParams, "wr.date", range);
 
-  const productKey = "coalesce(si.normalized_product_id, 'raw:' || lower(si.original_name))";
   const itemBaseProductKey = "coalesce(il.normalized_product_id, 'raw:' || lower(il.original_name))";
   const allocatedItemRevenue = `case
     when il.document_item_total > 0
@@ -768,9 +816,11 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
   const [salesRows, salesTotals, wasteRows] = await Promise.all([
     db.query<{
       product_key: string;
+      product_id: string | null;
       label: string;
       category: string;
       quantity_sold: string;
+      unit_cost: string | null;
       revenue: string;
       tickets: string;
     }>(
@@ -789,15 +839,17 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
          where ${salesFilters.join(" and ")}
        )
        select ${itemBaseProductKey} as product_key,
+              p.id as product_id,
               coalesce(p.canonical_name, il.original_name) as label,
               coalesce(c.name, 'Sin categoria') as category,
-              coalesce(sum(il.quantity), 0)::text as quantity_sold,
+              count(il.id)::text as quantity_sold,
+              p.cost::text as unit_cost,
               coalesce(sum(${allocatedItemRevenue}), 0)::text as revenue,
               count(distinct il.sales_document_id)::text as tickets
        from item_lines il
        left join products p on p.id = il.normalized_product_id
        left join categories c on c.id = p.category_id
-       group by ${itemBaseProductKey}, coalesce(p.canonical_name, il.original_name), coalesce(c.name, 'Sin categoria')`,
+       group by ${itemBaseProductKey}, p.id, p.cost, coalesce(p.canonical_name, il.original_name), coalesce(c.name, 'Sin categoria')`,
       salesParams
     ),
     queryOne<{
@@ -822,7 +874,7 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
          where ${salesFilters.join(" and ")}
        )
        select coalesce(sum(${allocatedItemRevenue}), 0)::text as revenue,
-              coalesce(sum(il.quantity), 0)::text as quantity_sold,
+              count(il.id)::text as quantity_sold,
               count(il.id)::text as item_lines,
               count(distinct il.sales_document_id)::text as tickets,
               count(distinct ${itemBaseProductKey})::text as products
@@ -858,6 +910,7 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
     string,
     {
       productKey: string;
+      productId: string | null;
       label: string;
       category: string;
       quantitySold: number;
@@ -866,12 +919,14 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
       wasteQuantity: number;
       wasteCost: number;
       wasteRecords: number;
+      unitCost: number | null;
     }
   >();
 
   for (const row of salesRows.rows) {
     rowsByKey.set(row.product_key, {
       productKey: row.product_key,
+      productId: row.product_id,
       label: row.label,
       category: row.category,
       quantitySold: toNumber(row.quantity_sold),
@@ -880,6 +935,7 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
       wasteQuantity: 0,
       wasteCost: 0,
       wasteRecords: 0
+      ,unitCost: row.unit_cost == null ? null : toNumber(row.unit_cost)
     });
   }
 
@@ -892,6 +948,7 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
     } else {
       rowsByKey.set(row.product_key, {
         productKey: row.product_key,
+        productId: row.product_key.startsWith("waste:") ? null : row.product_key,
         label: row.label,
         category: row.category,
         quantitySold: 0,
@@ -899,7 +956,8 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
         tickets: 0,
         wasteQuantity: toNumber(row.waste_quantity),
         wasteCost: toNumber(row.waste_cost),
-        wasteRecords: toNumber(row.waste_records)
+        wasteRecords: toNumber(row.waste_records),
+        unitCost: null
       });
     }
   }
@@ -913,11 +971,17 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
       const wasteUnitRate =
         row.quantitySold > 0 ? (row.wasteQuantity / row.quantitySold) * 100 : row.wasteQuantity > 0 ? 100 : 0;
       const averageUnitPrice = row.quantitySold > 0 ? row.revenue / row.quantitySold : 0;
+      const estimatedCost = row.unitCost == null ? null : row.quantitySold * row.unitCost;
+      const estimatedGrossProfit = estimatedCost == null ? null : row.revenue - estimatedCost - row.wasteCost;
       const signal = productSignal({ share, wasteRate, revenue: row.revenue, wasteCost: row.wasteCost });
 
       return {
         ...row,
         averageUnitPrice,
+        estimatedCost,
+        estimatedGrossProfit,
+        estimatedGrossMargin:
+          estimatedGrossProfit == null || row.revenue <= 0 ? null : (estimatedGrossProfit / row.revenue) * 100,
         share,
         wasteRate,
         wasteUnitRate,
@@ -927,6 +991,10 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
       };
     })
     .sort((a, b) => b.revenue - a.revenue || b.wasteCost - a.wasteCost || a.label.localeCompare(b.label));
+  const costedProducts = products.filter((row) => row.estimatedCost != null && row.revenue > 0);
+  const costedRevenue = sum(costedProducts.map((row) => row.revenue));
+  const estimatedProductCost = sum(costedProducts.map((row) => row.estimatedCost ?? 0));
+  const estimatedGrossProfit = costedRevenue - estimatedProductCost - sum(costedProducts.map((row) => row.wasteCost));
 
   res.json({
     range,
@@ -942,6 +1010,10 @@ app.get("/api/products/performance", requireAuth, async (req, res) => {
       wasteCost,
       wasteQuantity: sum(products.map((row) => row.wasteQuantity)),
       wasteRate: totalRevenue > 0 ? (wasteCost / totalRevenue) * 100 : 0,
+      estimatedProductCost,
+      estimatedGrossProfit,
+      estimatedGrossMargin: costedRevenue > 0 ? (estimatedGrossProfit / costedRevenue) * 100 : 0,
+      costCoverage: totalRevenue > 0 ? costedRevenue / totalRevenue : 0,
       topProduct: products.find((row) => row.revenue > 0)?.label ?? null
     },
     products: products.slice(0, limit)
@@ -953,6 +1025,8 @@ app.get("/api/hours/performance", requireAuth, async (req, res) => {
   const organizationId = req.user!.organization_id;
   const params: unknown[] = [organizationId];
   const filters = ["b.organization_id = $1", "sd.status <> 'credited'"];
+  const scope = await readBranchScope(req, organizationId);
+  addBranchScopeFilter(filters, params, "b.id", scope);
   addDateRangeFilter(filters, params, "sd.sale_date", range);
   const where = filters.join(" and ");
 
@@ -1318,20 +1392,25 @@ app.get("/api/analysis/sales", requireAuth, async (req, res) => {
       ? req.query.employeeId
       : null;
 
-  const branch = await getDefaultBranch(organizationId);
-  if (!branch) {
-    res.status(400).json({ error: "No hay una sucursal activa para analizar ventas" });
-    return;
+  const scope = await readBranchScope(req, organizationId);
+  if (scope.branchId) {
+    await ensureDefaultScheduleCoverage(organizationId, scope.branchId, range);
+  } else {
+    const branches = await db.query<{ id: string }>(
+      "select id from branches where organization_id = $1 and active = true",
+      [organizationId]
+    );
+    await Promise.all(branches.rows.map((branch) => ensureDefaultScheduleCoverage(organizationId, branch.id, range)));
   }
-
-  await ensureDefaultScheduleCoverage(organizationId, branch.id, range);
 
   const params: unknown[] = [organizationId];
   const filters = ["b.organization_id = $1", "sd.status <> 'credited'"];
+  addBranchScopeFilter(filters, params, "b.id", scope);
   addDateRangeFilter(filters, params, "sd.sale_date", range);
 
   const wasteParams: unknown[] = [organizationId];
   const wasteFilters = ["b.organization_id = $1"];
+  addBranchScopeFilter(wasteFilters, wasteParams, "b.id", scope);
   addDateRangeFilter(wasteFilters, wasteParams, "wr.date", range);
 
   if (weekdays !== null && weekdays.length > 0) {
@@ -1737,11 +1816,32 @@ app.get("/api/products/aliases", requireAuth, async (req, res) => {
   res.json({ products: rows.rows });
 });
 
+app.patch("/api/products/:id/cost", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
+  const input = productCostSchema.parse(req.body ?? {});
+  const existing = await queryOne<{ id: string; canonical_name: string; cost: string | null }>(
+    `select id, canonical_name, cost::text
+     from products
+     where id = $1 and organization_id = $2`,
+    [req.params.id, req.user!.organization_id]
+  );
+  if (!existing) {
+    res.status(404).json({ error: "Producto no encontrado" });
+    return;
+  }
+
+  await db.query("update products set cost = $1 where id = $2", [input.cost, existing.id]);
+  await audit(req.user!.organization_id, req.user!.id, "product.cost.updated", "products", existing.id,
+    { cost: existing.cost }, { cost: input.cost });
+  res.json({ id: existing.id, cost: input.cost });
+});
+
 app.get("/api/waste/records", requireAuth, async (req, res) => {
   const limit = Math.min(Number(req.query.limit ?? 120), 300);
   const range = readDateRange(req);
   const params: unknown[] = [req.user!.organization_id];
   const filters = ["b.organization_id = $1"];
+  const scope = await readBranchScope(req, req.user!.organization_id);
+  addBranchScopeFilter(filters, params, "b.id", scope);
   addDateRangeFilter(filters, params, "wr.date", range);
   params.push(limit);
 
@@ -1776,10 +1876,13 @@ app.get("/api/waste/summary", requireAuth, async (req, res) => {
   const range = readDateRange(req);
   const params: unknown[] = [req.user!.organization_id];
   const filters = ["b.organization_id = $1"];
+  const scope = await readBranchScope(req, req.user!.organization_id);
+  addBranchScopeFilter(filters, params, "b.id", scope);
   addDateRangeFilter(filters, params, "wr.date", range);
   const where = filters.join(" and ");
   const salesParams: unknown[] = [req.user!.organization_id];
   const salesFilters = ["b.organization_id = $1", "sd.status <> 'credited'"];
+  addBranchScopeFilter(salesFilters, salesParams, "b.id", scope);
   addDateRangeFilter(salesFilters, salesParams, "sd.sale_date", range);
   const salesWhere = salesFilters.join(" and ");
 
@@ -1866,16 +1969,20 @@ app.get("/api/waste/summary", requireAuth, async (req, res) => {
 
 app.get("/api/integration/status", requireAuth, async (req, res) => {
   const organizationId = req.user!.organization_id;
+  const scope = await readBranchScope(req, organizationId);
+  const params: unknown[] = [organizationId];
+  const filters = ["b.organization_id = $1"];
+  addBranchScopeFilter(filters, params, "b.id", scope);
   const syncRuns = await db.query(
     `select sr.id, sr.integration, sr.started_at, sr.finished_at, sr.status,
             sr.records_received, sr.records_created, sr.records_updated, sr.error_message,
             b.name as branch_name
      from sync_runs sr
      join branches b on b.id = sr.branch_id
-     where b.organization_id = $1
+     where ${filters.join(" and ")}
      order by sr.started_at desc
      limit 8`,
-    [organizationId]
+    params
   );
 
   res.json({
@@ -1907,7 +2014,7 @@ app.post(
   requireRole(["owner", "administrator", "manager"]),
   async (req, res) => {
     const input = portalSalesImportSchema.parse(req.body);
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id);
 
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para importar ventas" });
@@ -2037,14 +2144,7 @@ app.post(
   requireRole(["owner", "administrator", "manager"]),
   async (req, res) => {
     const input = syncDateSchema.parse(req.body);
-    const branch = input.branchId
-      ? await queryOne<{ id: string; name: string }>(
-          `select id, name
-           from branches
-           where id = $1 and organization_id = $2 and active = true`,
-          [input.branchId, req.user!.organization_id]
-        )
-      : await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id, input.branchId);
 
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para sincronizar" });
@@ -2075,14 +2175,7 @@ app.post(
   requireRole(["owner", "administrator", "manager"]),
   async (req, res) => {
     const input = hydrateDateDetailsSchema.parse(req.body);
-    const branch = input.branchId
-      ? await queryOne<{ id: string; name: string }>(
-          `select id, name
-           from branches
-           where id = $1 and organization_id = $2 and active = true`,
-          [input.branchId, req.user!.organization_id]
-        )
-      : await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id, input.branchId);
 
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para completar productos" });
@@ -2112,14 +2205,7 @@ app.post(
   requireRole(["owner", "administrator", "manager"]),
   async (req, res) => {
     const input = syncHistorySchema.parse(req.body);
-    const branch = input.branchId
-      ? await queryOne<{ id: string; name: string }>(
-          `select id, name
-           from branches
-           where id = $1 and organization_id = $2 and active = true`,
-          [input.branchId, req.user!.organization_id]
-        )
-      : await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id, input.branchId);
 
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para sincronizar" });
@@ -2150,14 +2236,7 @@ app.post(
   requireRole(["owner", "administrator", "manager"]),
   async (req, res) => {
     const input = syncHistorySchema.parse(req.body);
-    const branch = input.branchId
-      ? await queryOne<{ id: string; name: string }>(
-          `select id, name
-           from branches
-           where id = $1 and organization_id = $2 and active = true`,
-          [input.branchId, req.user!.organization_id]
-        )
-      : await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id, input.branchId);
 
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para sincronizar" });
@@ -2468,8 +2547,10 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
     return;
   }
 
+  const statusCode =
+    error instanceof Error && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : 500;
   console.error(error);
-  res.status(500).json({ error: "Error interno" });
+  res.status(statusCode).json({ error: statusCode === 500 ? "Error interno" : (error as Error).message });
 });
 
 export async function initializeServer() {

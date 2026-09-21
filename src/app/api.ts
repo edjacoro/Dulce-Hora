@@ -3,8 +3,22 @@ export type ApiError = {
   details?: unknown;
 };
 
+let activeBranchScope: string | null = null;
+
+export function setApiBranchScope(branchId: string | null) {
+  activeBranchScope = branchId;
+}
+
+function scopedApiPath(path: string) {
+  if (!activeBranchScope || !path.startsWith("/api/") || /^\/api\/(auth|setup|health)(\/|$)/.test(path)) {
+    return path;
+  }
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}branchId=${encodeURIComponent(activeBranchScope)}`;
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(scopedApiPath(path), {
     ...init,
     credentials: "include",
     headers: {
@@ -108,6 +122,12 @@ export type DashboardOverview = {
     wasteRecords: number;
     expenses: number;
   };
+  health: {
+    documentsToday: number;
+    detailedToday: number;
+    detailCoverage: number;
+    lastSuccessfulSyncAt: string | null;
+  };
   dataStatus: string;
 };
 
@@ -197,10 +217,15 @@ export type ProductPerformance = {
     wasteCost: number;
     wasteQuantity: number;
     wasteRate: number;
+    estimatedProductCost: number;
+    estimatedGrossProfit: number;
+    estimatedGrossMargin: number;
+    costCoverage: number;
     topProduct: string | null;
   };
   products: Array<{
     productKey: string;
+    productId: string | null;
     label: string;
     category: string;
     quantitySold: number;
@@ -210,6 +235,10 @@ export type ProductPerformance = {
     wasteCost: number;
     wasteRecords: number;
     averageUnitPrice: number;
+    unitCost: number | null;
+    estimatedCost: number | null;
+    estimatedGrossProfit: number | null;
+    estimatedGrossMargin: number | null;
     share: number;
     wasteRate: number;
     wasteUnitRate: number;
@@ -395,10 +424,19 @@ export type FinanceMonthRow = {
   salesPerDay: number;
   ticketsPerDay: number;
   expenses: number;
+  cogs: number;
+  labor: number;
+  operatingExpenses: number;
+  laborHours: number;
+  salesPerLaborHour: number;
+  ticketsPerLaborHour: number;
+  laborPercent: number;
   waste: number;
   costs: number;
   result: number;
   margin: number;
+  grossProfit: number;
+  grossMargin: number;
   daysWithSales: number;
   current: boolean;
 };

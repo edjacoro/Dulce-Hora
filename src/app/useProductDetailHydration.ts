@@ -43,8 +43,12 @@ export function useProductDetailHydration({
 
     let mounted = true;
     runningHydrations.add(date);
-    setRunningDate(date);
-    setRemaining(null);
+    queueMicrotask(() => {
+      if (mounted) {
+        setRunningDate(date);
+        setRemaining(null);
+      }
+    });
 
     void hydrateDulceHoraDetailsUntilDone({
       date,

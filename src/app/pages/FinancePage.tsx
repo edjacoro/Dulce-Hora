@@ -381,15 +381,25 @@ function WasteFinanceView({ data }: { data: FinanceDashboard }) {
 }
 
 function PnlView({ data }: { data: FinanceDashboard }) {
+  const current = data.monthlyRows.find((row) => row.month === data.month);
   return (
-    <section className="content-band">
-      <h2>P&L anual</h2>
-      <MonthlyTable rows={data.monthlyRows} />
-    </section>
+    <>
+      <div className="kpi-grid">
+        <Kpi label="Margen bruto" value={formatCurrency(current?.grossProfit ?? 0)} tone="green" />
+        <Kpi label="Costo mercaderia" value={formatCurrency(current?.cogs ?? 0)} tone="red" />
+        <Kpi label="Costo de personal" value={formatCurrency(current?.labor ?? 0)} tone="amber" />
+        <Kpi label="Venta por hora trabajada" value={formatCurrency(current?.salesPerLaborHour ?? 0)} tone="blue" />
+        <Kpi label="Tickets por hora trabajada" value={formatNumber(current?.ticketsPerLaborHour ?? 0)} tone="blue" />
+      </div>
+      <section className="content-band">
+        <h2>P&L anual y productividad</h2>
+        <MonthlyTable rows={data.monthlyRows} expanded />
+      </section>
+    </>
   );
 }
 
-function MonthlyTable({ rows }: { rows: FinanceMonthRow[] }) {
+function MonthlyTable({ rows, expanded = false }: { rows: FinanceMonthRow[]; expanded?: boolean }) {
   const maxSales = Math.max(1, ...rows.map((row) => row.sales));
   const maxExpenses = Math.max(1, ...rows.map((row) => row.expenses));
   const maxWaste = Math.max(1, ...rows.map((row) => row.waste));
@@ -406,10 +416,12 @@ function MonthlyTable({ rows }: { rows: FinanceMonthRow[] }) {
               <th>Venta/dia</th>
               <th>Tickets/dia</th>
               <th>Gastos</th>
+              {expanded ? <><th>Mercaderia</th><th>Personal</th><th>Otros gastos</th></> : null}
               <th>Mermas $</th>
               <th>Merma %</th>
               <th>Resultado</th>
               <th>Margen %</th>
+              {expanded ? <><th>Margen bruto</th><th>Hs. equipo</th><th>Venta/h</th><th>Tickets/h</th><th>Personal/venta</th></> : null}
             </tr>
           </thead>
           <tbody>
@@ -431,6 +443,11 @@ function MonthlyTable({ rows }: { rows: FinanceMonthRow[] }) {
                   {formatCurrency(row.expenses)}
                   <Meter value={row.expenses} max={maxExpenses} tone="cost" />
                 </td>
+                {expanded ? <>
+                  <td>{formatCurrency(row.cogs)}</td>
+                  <td>{formatCurrency(row.labor)}</td>
+                  <td>{formatCurrency(row.operatingExpenses)}</td>
+                </> : null}
                 <td>
                   {row.waste === 0 ? "-" : formatCurrency(row.waste)}
                   {row.waste > 0 ? <Meter value={row.waste} max={maxWaste} tone="cost" /> : null}
@@ -444,6 +461,13 @@ function MonthlyTable({ rows }: { rows: FinanceMonthRow[] }) {
                 <td className={row.margin >= 0 ? "positive-text" : "negative-text"}>
                   {formatNumber(row.margin)}%
                 </td>
+                {expanded ? <>
+                  <td className={row.grossProfit >= 0 ? "positive-text" : "negative-text"}>{signedCurrency(row.grossProfit)} ({formatNumber(row.grossMargin)}%)</td>
+                  <td>{formatNumber(row.laborHours)}</td>
+                  <td>{formatCurrency(row.salesPerLaborHour)}</td>
+                  <td>{formatNumber(row.ticketsPerLaborHour)}</td>
+                  <td>{formatNumber(row.laborPercent)}%</td>
+                </> : null}
               </tr>
             ))}
           </tbody>

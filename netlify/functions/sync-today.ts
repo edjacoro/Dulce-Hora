@@ -1,5 +1,5 @@
 import type { Config, Handler } from "@netlify/functions";
-import { migrate, queryOne } from "../../server/db.js";
+import { db, migrate, queryOne } from "../../server/db.js";
 import { getDefaultBranch, hydrateDulceHoraDetailBacklog, syncDulceHoraDate } from "../../server/dulceHoraSync.js";
 
 process.env.DULCE_HORA_SERVERLESS = "true";
@@ -23,6 +23,11 @@ type UserRow = {
 export const handler: Handler = async () => {
   try {
     await migrate();
+
+    const clock = argentinaClock();
+    if (clock.hour < 6 || clock.hour >= 22) {
+      return json(200, { ok: true, skipped: "outside-business-window", hour: clock.hour });
+    }
 
     const organization = await queryOne<OrganizationRow>(
       "select id, name from organizations order by created_at limit 1"
@@ -62,8 +67,26 @@ export const handler: Handler = async () => {
       includeWaste: false,
       includeStatistics: false
     });
+
+    let repairedDate: string | null = null;
+    let repairedRecords = 0;
+    if (clock.minute < 15) {
+      repairedDate = await findRecentDateNeedingFinalSync(branch.id, date, 14);
+      if (repairedDate) {
+        const repair = await syncDulceHoraDate({
+          branchId: branch.id,
+          organizationId: organization.id,
+          userId: user.id,
+          date: repairedDate,
+          includeWaste: false,
+          includeStatistics: false
+        });
+        repairedRecords = repair.recordsReceived;
+      }
+    }
+
     const detailLimit = positiveInteger(process.env.DULCE_HORA_SCHEDULED_DETAIL_LIMIT, 8);
-    const detailWindowDays = positiveInteger(process.env.DULCE_HORA_SCHEDULED_DETAIL_WINDOW_DAYS, 7);
+    const detailWindowDays = positiveInteger(process.env.DULCE_HORA_SCHEDULED_DETAIL_WINDOW_DAYS, 14);
     const detailResult = await hydrateDulceHoraDetailBacklog({
       branchId: branch.id,
       organizationId: organization.id,
@@ -79,6 +102,8 @@ export const handler: Handler = async () => {
       recordsReceived: result.recordsReceived,
       recordsCreated: result.recordsCreated,
       recordsUpdated: result.recordsUpdated,
+      repairedDate,
+      repairedRecords,
       itemRows: detailResult.itemRows,
       detailRecordsUpdated: detailResult.recordsUpdated,
       detailRecordsRemaining: detailResult.detailRecordsRemaining ?? null,
@@ -92,6 +117,43 @@ export const handler: Handler = async () => {
     });
   }
 };
+
+async function findRecentDateNeedingFinalSync(branchId: string, today: string, windowDays: number) {
+  const from = shiftDate(today, -windowDays);
+  const to = shiftDate(today, -1);
+  const [sales, finalSyncs] = await Promise.all([
+    db.query<{ date: string; documents: string }>(
+      `select sale_date::text as date, count(*)::text as documents
+       from sales_documents
+       where branch_id = $1 and sale_date >= $2 and sale_date <= $3
+       group by sale_date`,
+      [branchId, from, to]
+    ),
+    db.query<{ date: string; synced_at: string }>(
+      `select al.new_value->>'date' as date, max(al.created_at)::text as synced_at
+       from audit_logs al
+       join sync_runs sr on sr.id = al.entity_id
+       where al.action = 'sync.dulce_hora.date'
+         and al.entity = 'sync_runs'
+         and sr.branch_id = $1
+         and al.new_value->>'date' >= $2
+         and al.new_value->>'date' <= $3
+       group by al.new_value->>'date'`,
+      [branchId, from, to]
+    )
+  ]);
+
+  const documentsByDate = new Map(sales.rows.map((row) => [row.date, Number(row.documents)]));
+  const finalSyncByDate = new Map(finalSyncs.rows.map((row) => [row.date, row.synced_at.slice(0, 10)]));
+  for (let offset = windowDays; offset >= 1; offset -= 1) {
+    const candidate = shiftDate(today, -offset);
+    const finalSyncDate = finalSyncByDate.get(candidate);
+    if ((documentsByDate.get(candidate) ?? 0) === 0 || !finalSyncDate || finalSyncDate <= candidate) {
+      return candidate;
+    }
+  }
+  return null;
+}
 
 function json(statusCode: number, body: unknown) {
   return {
@@ -110,6 +172,19 @@ function todayArgentina() {
   }).formatToParts(new Date());
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function argentinaClock() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(new Date());
+  return {
+    hour: Number(parts.find((part) => part.type === "hour")?.value ?? 0) % 24,
+    minute: Number(parts.find((part) => part.type === "minute")?.value ?? 0)
+  };
 }
 
 function positiveInteger(value: string | undefined, fallback: number) {

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "./api";

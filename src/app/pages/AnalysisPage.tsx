@@ -513,10 +513,6 @@ function employeeName(data: AnalysisDashboard, employeeId: string) {
   return data.employees.find((employee) => employee.id === employeeId)?.name ?? "Empleado seleccionado";
 }
 
-function weekdayName(value: string) {
-  return weekdayOptions.find((option) => option.value === value)?.label ?? "Todos";
-}
-
 function clampHour(value: string) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;

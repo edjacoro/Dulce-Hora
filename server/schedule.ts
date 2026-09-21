@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireAuth, requireRole, type AuthUser } from "./auth.js";
 import { db } from "./db.js";
 import { getDefaultBranch } from "./dulceHoraSync.js";
+import { readBranchScope, readWriteBranch } from "./branchScope.js";
 
 type Queryable = {
   query<T = unknown>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
@@ -311,10 +312,10 @@ const scheduleHolidayInputSchema = z.object({
 
 export function registerScheduleRoutes(app: Express) {
   app.get("/api/employees", requireAuth, async (req, res) => {
-    const branch = await getDefaultBranch(req.user!.organization_id);
-    if (branch) {
+    const scope = await readBranchScope(req, req.user!.organization_id);
+    if (scope.branchId) {
       const month = todayArgentina().slice(0, 7);
-      await ensureDefaultScheduleForMonth(req.user!.organization_id, branch.id, month, monthRange(month));
+      await ensureDefaultScheduleForMonth(req.user!.organization_id, scope.branchId, month, monthRange(month));
     }
 
     const employeesResult = await db.query<EmployeeRecordRow>(
@@ -447,7 +448,10 @@ export function registerScheduleRoutes(app: Express) {
   app.get("/api/schedule", requireAuth, async (req, res) => {
     const month = readMonth(req) ?? todayArgentina().slice(0, 7);
     const range = monthRange(month);
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const scope = await readBranchScope(req, req.user!.organization_id);
+    const branch = scope.branchId
+      ? { id: scope.branchId, name: scope.branchName }
+      : await getDefaultBranch(req.user!.organization_id);
 
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para la grilla" });
@@ -620,7 +624,7 @@ export function registerScheduleRoutes(app: Express) {
 
   app.post("/api/schedule/holidays", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
     const input = scheduleHolidayInputSchema.parse(req.body);
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id);
 
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para guardar feriados" });
@@ -669,7 +673,7 @@ export function registerScheduleRoutes(app: Express) {
   });
 
   app.delete("/api/schedule/holidays/:id", requireRole(["owner", "administrator", "manager"]), async (req, res) => {
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id);
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para borrar feriados" });
       return;
@@ -799,7 +803,7 @@ export function registerScheduleRoutes(app: Express) {
 
   app.post("/api/schedule/shifts", requireRole(["owner"]), async (req, res) => {
     const input = shiftInputSchema.parse(req.body);
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id);
 
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa para guardar turnos" });
@@ -1004,7 +1008,7 @@ export function registerScheduleRoutes(app: Express) {
   });
 
   app.delete("/api/schedule/shifts/:id", requireRole(["owner"]), async (req, res) => {
-    const branch = await getDefaultBranch(req.user!.organization_id);
+    const branch = await readWriteBranch(req, req.user!.organization_id);
     if (!branch) {
       res.status(400).json({ error: "No hay una sucursal activa" });
       return;

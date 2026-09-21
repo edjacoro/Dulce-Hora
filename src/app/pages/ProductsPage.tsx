@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ArrowRight,
@@ -9,6 +9,7 @@ import {
   PackageSearch,
   ReceiptText,
   ShoppingBag,
+  Save,
   Star,
   Trash2,
   TrendingUp
@@ -38,6 +39,7 @@ type ProductSortKey =
   | "signal";
 
 export function ProductsPage() {
+  const queryClient = useQueryClient();
   const importJob = useDulceHoraImportJob();
   const {
     mode,
@@ -54,6 +56,14 @@ export function ProductsPage() {
   const [sort, setSort] = useState<{ key: ProductSortKey; direction: SortDirection }>({
     key: "revenue",
     direction: "desc"
+  });
+  const [costDrafts, setCostDrafts] = useState<Record<string, string>>({});
+  const saveCost = useMutation({
+    mutationFn: ({ productId, cost }: { productId: string; cost: number | null }) =>
+      api(`/api/products/${productId}/cost`, { method: "PATCH", body: JSON.stringify({ cost }) }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["product-performance"] });
+    }
   });
   const period = useMemo(
     () => periodRange({ mode, selectedDate, selectedMonth, from, to }),
@@ -227,6 +237,57 @@ export function ProductsPage() {
               }))}
             />
           </div>
+
+          <section className="content-band">
+            <div className="table-heading">
+              <div>
+                <h2>Costos y rentabilidad estimada</h2>
+                <p className="muted-text">
+                  Cobertura de costos: {formatPercent(data.summary.costCoverage * 100)}. El margen se calcula solo sobre productos con costo cargado.
+                </p>
+              </div>
+              <span className="period-chip">Margen {formatPercent(data.summary.estimatedGrossMargin)}</span>
+            </div>
+            <div className="data-table-wrap">
+              <table className="data-table product-cost-table">
+                <thead><tr><th>Producto</th><th>Costo unitario</th><th>Costo estimado</th><th>Resultado bruto</th><th>Margen</th><th>Guardar</th></tr></thead>
+                <tbody>
+                  {products.filter((product) => product.productId).map((product) => {
+                    const draft = costDrafts[product.productId!] ?? (product.unitCost == null ? "" : String(product.unitCost));
+                    return (
+                      <tr key={`cost-${product.productId}`}>
+                        <td><strong>{product.label}</strong><span className="cell-muted">{product.category}</span></td>
+                        <td>
+                          <input
+                            aria-label={`Costo de ${product.label}`}
+                            className="table-number-input"
+                            min="0"
+                            step="0.01"
+                            type="number"
+                            value={draft}
+                            onChange={(event) => setCostDrafts((current) => ({ ...current, [product.productId!]: event.target.value }))}
+                          />
+                        </td>
+                        <td>{product.estimatedCost == null ? "Sin costo" : formatCurrency(product.estimatedCost)}</td>
+                        <td>{product.estimatedGrossProfit == null ? "-" : formatCurrency(product.estimatedGrossProfit)}</td>
+                        <td>{product.estimatedGrossMargin == null ? "-" : formatPercent(product.estimatedGrossMargin)}</td>
+                        <td>
+                          <button
+                            className="icon-only-button"
+                            disabled={saveCost.isPending || (draft !== "" && !Number.isFinite(Number(draft)))}
+                            onClick={() => saveCost.mutate({ productId: product.productId!, cost: draft === "" ? null : Number(draft) })}
+                            title="Guardar costo"
+                            type="button"
+                          ><Save size={16} aria-hidden="true" /></button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {saveCost.error ? <p className="form-error">{saveCost.error.message}</p> : null}
+          </section>
 
           <section className="content-band">
             <div className="table-heading">
@@ -541,21 +602,6 @@ function dateQuery(from: string, to: string) {
   params.set("to", to);
   const value = params.toString();
   return value ? `?${value}` : "";
-}
-
-function today() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Argentina/Buenos_Aires",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function monthStart() {
-  return `${today().slice(0, 8)}01`;
 }
 
 function monthRange(month: string) {
