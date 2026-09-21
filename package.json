@@ -16,7 +16,7 @@
     "sync:closed-months": "tsx scripts/sync-dulce-hora-periods.ts --mode=closed",
     "sync:current-month": "tsx scripts/sync-dulce-hora-periods.ts --mode=current",
     "sync:all": "tsx scripts/sync-dulce-hora-periods.ts --mode=all",
-    "test": "node --import tsx --test tests/schedule.integration.test.ts",
+    "test": "node --import ./tests/os-user-info-shim.mjs --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
