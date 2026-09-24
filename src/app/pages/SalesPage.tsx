@@ -166,7 +166,7 @@ export function SalesPage() {
 
       {isDayMode && detailHydration.running ? (
         <div className="auto-detail-banner">
-          Completando productos en segundo plano
+          Productos enviados al proceso en segundo plano
           <strong>{Math.round(detailHydration.coverage * 100)}%</strong>
           {detailHydration.remaining != null ? <span>{detailHydration.remaining} tickets pendientes</span> : null}
         </div>

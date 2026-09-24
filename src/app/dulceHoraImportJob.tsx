@@ -1,8 +1,8 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
-import { api } from "./api";
-import { hydrateDulceHoraDetailsUntilDone, invalidateDulceHoraReporting } from "./dulceHoraDetails";
+import { api, queueDulceHoraDetailBackfill } from "./api";
+import { invalidateDulceHoraReporting } from "./dulceHoraDetails";
 
 type SyncResult = {
   runId: string;
@@ -37,6 +37,7 @@ export type DulceHoraImportJobState = {
   detailItemRows: number;
   detailRecordsUpdated: number;
   detailRemaining: number | null;
+  backgroundQueued: boolean;
   warnings: string[];
   error: string | null;
 };
@@ -71,6 +72,7 @@ const idleState: DulceHoraImportJobState = {
   detailItemRows: 0,
   detailRecordsUpdated: 0,
   detailRemaining: null,
+  backgroundQueued: false,
   warnings: [],
   error: null
 };
@@ -90,7 +92,6 @@ export function DulceHoraImportJobProvider({ children }: { children: ReactNode }
 
       const date = options.date;
       const maxRuns = options.maxRuns ?? 55;
-      const detailLimit = options.detailLimit ?? 6;
       const includeWaste = options.includeWaste ?? false;
       const includeProductDetails = options.includeProductDetails ?? true;
 
@@ -126,28 +127,9 @@ export function DulceHoraImportJobProvider({ children }: { children: ReactNode }
             error: null
           }));
 
-          const detailResult = includeProductDetails
-            ? await hydrateDulceHoraDetailsUntilDone({
-                date,
-                queryClient,
-                limit: detailLimit,
-                maxRuns,
-                onProgress: (progress) => {
-                  setState((current) => ({
-                    ...current,
-                    active: true,
-                    phase: "details",
-                    date,
-                    detailRun: progress.run,
-                    detailTotalRuns: progress.totalRuns,
-                    detailItemRows: progress.itemRows,
-                    detailRecordsUpdated: progress.recordsUpdated,
-                    detailRemaining: progress.remaining,
-                    error: null
-                  }));
-                }
-              })
-            : { itemRows: 0, recordsUpdated: 0, detailRecordsRemaining: null };
+          if (includeProductDetails) {
+            await queueDulceHoraDetailBackfill({ date, days: 1, refreshLastDate: false });
+          }
 
           setState((current) => ({
             ...current,
@@ -155,9 +137,8 @@ export function DulceHoraImportJobProvider({ children }: { children: ReactNode }
             phase: "done",
             date,
             finishedAt: new Date().toISOString(),
-            detailItemRows: detailResult.itemRows,
-            detailRecordsUpdated: detailResult.recordsUpdated,
-            detailRemaining: detailResult.detailRecordsRemaining,
+            backgroundQueued: includeProductDetails,
+            detailRemaining: null,
             error: null
           }));
         } catch (error) {
@@ -214,7 +195,7 @@ export function DulceHoraImportJobBanner() {
 
   const isDone = state.phase === "done";
   const isError = state.phase === "error";
-  const title = state.phase === "syncing" ? "Sincronizando Dulce Hora" : state.active ? "Completando productos" : isDone ? "Importacion lista" : "Importacion con error";
+  const title = state.phase === "syncing" ? "Sincronizando Dulce Hora" : state.active ? "Completando productos" : state.backgroundQueued ? "Productos en segundo plano" : isDone ? "Importacion lista" : "Importacion con error";
 
   return (
     <div className={`background-import-banner ${isError ? "error" : isDone ? "done" : "active"}`}>
@@ -229,7 +210,9 @@ export function DulceHoraImportJobBanner() {
             ? "Leyendo ventas desde Dulce Hora. Podes seguir usando la app."
             : state.error
               ? state.error
-              : `${state.detailItemRows} items cargados${state.detailRemaining !== null ? `, ${state.detailRemaining} comprobantes pendientes` : ""}.`}
+              : state.backgroundQueued
+                ? "La app puede cerrarse o cambiar de seccion: Netlify completa los productos y los guarda en Neon."
+                : `${state.detailItemRows} items cargados${state.detailRemaining !== null ? `, ${state.detailRemaining} comprobantes pendientes` : ""}.`}
         </small>
       </div>
       {!state.active ? (

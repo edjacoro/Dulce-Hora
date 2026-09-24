@@ -25,6 +25,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { SetupPage } from "./pages/SetupPage";
 import { DulceHoraImportJobBanner, DulceHoraImportJobProvider } from "./dulceHoraImportJob";
 import { BranchScopeProvider, formatBranchName, useBranchScope } from "./branchScope";
+import { useRecentProductDetailBackfill } from "./useRecentProductDetailBackfill";
 
 const AiPage = lazy(() => import("./pages/AiPage").then((module) => ({ default: module.AiPage })));
 const AnalysisPage = lazy(() => import("./pages/AnalysisPage").then((module) => ({ default: module.AnalysisPage })));
@@ -191,6 +192,7 @@ export function App() {
 
       <main className="main-panel">
         <DulceHoraImportJobProvider>
+          <RecentProductDetailBackfill />
           <header className="topbar">
             <img className="topbar-logo" src={dulceHoraLogo} alt="" />
             <div>
@@ -306,6 +308,11 @@ export function App() {
     </div>
     </BranchScopeProvider>
   );
+}
+
+function RecentProductDetailBackfill() {
+  useRecentProductDetailBackfill();
+  return null;
 }
 
 function BranchScopeLabel({ currency }: { currency: string }) {

@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { api, type SalesSummary } from "./api";
-import { hydrateDulceHoraDetailsUntilDone } from "./dulceHoraDetails";
+import { api, queueDulceHoraDetailBackfill, type SalesSummary } from "./api";
+import { useBranchScope } from "./branchScope";
+import { invalidateDulceHoraReporting } from "./dulceHoraDetails";
 
-const runningHydrations = new Set<string>();
+const queuedHydrations = new Set<string>();
 
 type AutoHydrationOptions = {
   date: string;
@@ -15,6 +16,7 @@ type AutoHydrationState = {
   running: boolean;
   coverage: number;
   remaining: number | null;
+  queued: boolean;
 };
 
 export function useProductDetailHydration({
@@ -23,7 +25,9 @@ export function useProductDetailHydration({
   coverage
 }: AutoHydrationOptions): AutoHydrationState {
   const queryClient = useQueryClient();
-  const [runningDate, setRunningDate] = useState<string | null>(null);
+  const { branchId, consolidated } = useBranchScope();
+  const hydrationKey = `${branchId}:${date}`;
+  const [queuedKey, setQueuedKey] = useState<string | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
 
   const coverageQuery = useQuery({
@@ -39,47 +43,50 @@ export function useProductDetailHydration({
   }, [coverage, coverageQuery.data?.summary.itemDetailCoverage]);
 
   useEffect(() => {
-    if (!enabled || !date || currentCoverage >= 0.995 || runningHydrations.has(date)) return;
+    if (consolidated || !enabled || !date || currentCoverage >= 0.995 || queuedHydrations.has(hydrationKey)) return;
 
     let mounted = true;
-    runningHydrations.add(date);
+    queuedHydrations.add(hydrationKey);
     queueMicrotask(() => {
       if (mounted) {
-        setRunningDate(date);
+        setQueuedKey(hydrationKey);
         setRemaining(null);
       }
     });
 
-    void hydrateDulceHoraDetailsUntilDone({
-      date,
-      queryClient,
-      limit: 6,
-      maxRuns: 36,
-      pauseMs: 650,
-      onProgress: (progress) => {
-        if (!mounted) return;
-        setRemaining(progress.remaining);
-      }
-    })
+    void queueDulceHoraDetailBackfill({ date, days: 1, refreshLastDate: false })
       .catch((error) => {
-        console.warn("[dulce-hora] No se pudo completar detalle de productos automaticamente", error);
-      })
-      .finally(() => {
-        runningHydrations.delete(date);
+        queuedHydrations.delete(hydrationKey);
+        console.warn("[dulce-hora] No se pudo iniciar la recuperacion de productos", error);
         if (mounted) {
-          setRunningDate(null);
-          setRemaining(null);
+          setQueuedKey(null);
         }
       });
 
     return () => {
       mounted = false;
     };
-  }, [currentCoverage, date, enabled, queryClient]);
+  }, [consolidated, currentCoverage, date, enabled, hydrationKey, queryClient]);
+
+  useEffect(() => {
+    if (queuedKey !== hydrationKey || currentCoverage >= 0.995) return;
+    const timer = window.setInterval(() => {
+      void invalidateDulceHoraReporting(queryClient);
+    }, 20_000);
+    return () => window.clearInterval(timer);
+  }, [currentCoverage, hydrationKey, queryClient, queuedKey]);
+
+  useEffect(() => {
+    if (currentCoverage < 0.995 || queuedKey !== hydrationKey) return;
+    queuedHydrations.delete(hydrationKey);
+    setQueuedKey(null);
+    setRemaining(null);
+  }, [currentCoverage, hydrationKey, queuedKey]);
 
   return {
-    running: runningDate === date || runningHydrations.has(date),
+    running: queuedKey === hydrationKey || queuedHydrations.has(hydrationKey),
     coverage: currentCoverage,
-    remaining
+    remaining,
+    queued: queuedKey === hydrationKey || queuedHydrations.has(hydrationKey)
   };
 }

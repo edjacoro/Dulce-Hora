@@ -54,6 +54,32 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
+export async function queueDulceHoraDetailBackfill(input: {
+  date?: string;
+  days?: number;
+  refreshLastDate?: boolean;
+} = {}) {
+  const path = "/api/integration/dulce-hora/detail-backfill";
+  const response = await fetch(scopedApiPath(path), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+
+  if (response.ok) return;
+
+  let message = "No se pudo iniciar la recuperacion de productos";
+  try {
+    const payload = (await response.json()) as ApiError;
+    message = payload.error || message;
+  } catch {
+    const text = await response.text();
+    if (text.trim()) message = cleanErrorText(text).slice(0, 240);
+  }
+  throw new Error(message);
+}
+
 function timeoutErrorMessage(path: string) {
   if (path.includes("/api/imports/expenses-sheet")) {
     return "Netlify corto la importacion por timeout leyendo la planilla de Google Drive. Reintenta la importacion; si se repite, la planilla esta tardando demasiado en descargarse o procesarse.";

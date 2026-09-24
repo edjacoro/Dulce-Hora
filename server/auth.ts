@@ -43,6 +43,41 @@ function parseCookies(header: string | undefined) {
   return cookies;
 }
 
+export async function resolveUserFromCookieHeader(cookieHeader: string | undefined) {
+  const token = parseCookies(cookieHeader).get(cookieName);
+  if (!token) return null;
+
+  const session = await queryOne<AuthUser & { session_id: string }>(
+    `select
+       s.id as session_id,
+       u.id,
+       u.organization_id,
+       u.name,
+       u.email,
+       u.role,
+       u.avatar_url
+     from sessions s
+     join users u on u.id = s.user_id
+     where s.token_hash = $1
+       and s.expires_at > now()
+       and u.active = true`,
+    [hashToken(token)]
+  );
+
+  if (!session) return null;
+  return {
+    sessionId: session.session_id,
+    user: {
+      id: session.id,
+      organization_id: session.organization_id,
+      name: session.name,
+      email: session.email,
+      role: session.role,
+      avatar_url: session.avatar_url
+    } satisfies AuthUser
+  };
+}
+
 export async function hashPassword(password: string) {
   return bcrypt.hash(password, 12);
 }
@@ -81,36 +116,10 @@ export async function clearSession(req: Request, res: Response) {
 }
 
 export async function attachUser(req: Request, _res: Response, next: NextFunction) {
-  const token = parseCookies(req.headers.cookie).get(cookieName);
-  if (!token) return next();
-
-  const session = await queryOne<AuthUser & { session_id: string }>(
-    `select
-       s.id as session_id,
-       u.id,
-       u.organization_id,
-       u.name,
-       u.email,
-       u.role,
-       u.avatar_url
-     from sessions s
-     join users u on u.id = s.user_id
-     where s.token_hash = $1
-       and s.expires_at > now()
-       and u.active = true`,
-    [hashToken(token)]
-  );
-
-  if (session) {
-    req.sessionId = session.session_id;
-    req.user = {
-      id: session.id,
-      organization_id: session.organization_id,
-      name: session.name,
-      email: session.email,
-      role: session.role,
-      avatar_url: session.avatar_url
-    };
+  const resolved = await resolveUserFromCookieHeader(req.headers.cookie);
+  if (resolved) {
+    req.sessionId = resolved.sessionId;
+    req.user = resolved.user;
   }
 
   next();

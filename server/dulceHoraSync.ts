@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db, queryOne } from "./db.js";
+import { datesNeedingBaseRefresh, recentDetailWindow } from "./recentProductBackfill.js";
 import {
   DulceHoraAuthenticationError,
   DulceHoraClient,
@@ -30,6 +31,16 @@ type DetailBacklogInput = Omit<SyncInput, "date"> & {
   dateFrom: string;
   dateTo: string;
   limit?: number;
+  maxDurationMs?: number;
+  integration?: string;
+};
+
+export type RecentProductBackfillInput = Omit<SyncInput, "date" | "includeWaste" | "includeStatistics"> & {
+  dateTo: string;
+  days?: number;
+  refreshLastDate?: boolean;
+  detailLimit?: number;
+  maxDetailDurationMs?: number;
 };
 
 type ParsedItem = {
@@ -283,10 +294,11 @@ export async function hydrateDulceHoraDetailBacklog(input: DetailBacklogInput): 
   }
 
   const runId = randomUUID();
+  const integration = input.integration ?? "dulce-hora-panel-details-backlog";
   await db.query(
     `insert into sync_runs (id, branch_id, integration, status)
-     values ($1, $2, 'dulce-hora-panel-details-backlog', 'running')`,
-    [runId, input.branchId]
+     values ($1, $2, $3, 'running')`,
+    [runId, input.branchId, integration]
   );
 
   const result: SyncResult = {
@@ -318,8 +330,13 @@ export async function hydrateDulceHoraDetailBacklog(input: DetailBacklogInput): 
       await withDulceHoraSession(credentials, async (client) => {
         const catalog = await catalogFromDatabase(input.organizationId);
         let completedDetailRecords = 0;
+        const startedAt = Date.now();
 
         for (const candidate of entries) {
+          if (input.maxDurationMs && Date.now() - startedAt >= input.maxDurationMs) {
+            result.warnings.push("La recuperacion de productos alcanzo su limite seguro; los pendientes siguen en la proxima pasada.");
+            break;
+          }
           try {
             const document = await fetchDocumentWithRetry(client, candidate.entry);
             const parsed = parseDocument(document, candidate.date, catalog);
@@ -360,6 +377,39 @@ export async function hydrateDulceHoraDetailBacklog(input: DetailBacklogInput): 
     await finishRun(runId, "failed", result, message);
     throw error;
   }
+}
+
+export async function syncRecentProductBackfill(input: RecentProductBackfillInput) {
+  const window = recentDetailWindow(input.dateTo, input.days ?? 4);
+  const completedBaseSyncs = await successfulBaseSyncDates(input.branchId, window.dateFrom, window.dateTo);
+  const datesToRefresh = datesNeedingBaseRefresh(window, completedBaseSyncs, input.refreshLastDate ?? true);
+  const baseResults: SyncResult[] = [];
+
+  for (const date of datesToRefresh) {
+    baseResults.push(
+      await syncDulceHoraDate({
+        branchId: input.branchId,
+        organizationId: input.organizationId,
+        userId: input.userId,
+        date,
+        includeWaste: false,
+        includeStatistics: false
+      })
+    );
+  }
+
+  const details = await hydrateDulceHoraDetailBacklog({
+    branchId: input.branchId,
+    organizationId: input.organizationId,
+    userId: input.userId,
+    dateFrom: window.dateFrom,
+    dateTo: window.dateTo,
+    limit: input.detailLimit,
+    maxDurationMs: input.maxDetailDurationMs,
+    integration: "dulce-hora-panel-details-background"
+  });
+
+  return { window, datesToRefresh, baseResults, details };
 }
 
 export async function syncDulceHoraHistory(
@@ -902,6 +952,23 @@ async function entriesNeedingDetailBacklogFromDatabase(
       };
     })
   };
+}
+
+async function successfulBaseSyncDates(branchId: string, dateFrom: string, dateTo: string) {
+  const rows = await db.query<{ date: string }>(
+    `select distinct al.new_value->>'date' as date
+     from audit_logs al
+     join sync_runs sr on sr.id = al.entity_id
+     where al.action = 'sync.dulce_hora.date'
+       and al.entity = 'sync_runs'
+       and sr.branch_id = $1
+       and sr.integration = 'dulce-hora-panel'
+       and sr.status = 'success'
+       and al.new_value->>'date' >= $2
+       and al.new_value->>'date' <= $3`,
+    [branchId, dateFrom, dateTo]
+  );
+  return rows.rows.map((row) => row.date);
 }
 
 async function catalogFromDatabase(organizationId: string): Promise<Map<string, ProductCatalogItem>> {
