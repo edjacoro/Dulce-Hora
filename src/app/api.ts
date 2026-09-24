@@ -70,14 +70,14 @@ export async function queueDulceHoraDetailBackfill(input: {
   if (response.ok) return;
 
   let message = "No se pudo iniciar la recuperacion de productos";
+  const responseText = await response.text().catch(() => "");
   try {
-    const payload = (await response.json()) as ApiError;
+    const payload = JSON.parse(responseText) as ApiError;
     message = payload.error || message;
   } catch {
-    const text = await response.text();
-    if (text.trim()) message = cleanErrorText(text).slice(0, 240);
+    if (responseText.trim()) message = cleanErrorText(responseText).slice(0, 240);
   }
-  throw new Error(message);
+  throw new Error(`Netlify rechazo la tarea de productos (HTTP ${response.status}): ${message}`);
 }
 
 function timeoutErrorMessage(path: string) {

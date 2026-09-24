@@ -70,6 +70,7 @@ export const handler: BackgroundHandler = async (event) => {
     });
   } catch (error) {
     console.error("[dulce-hora:detail-backfill]", error);
+    throw error;
   }
 };
 
