@@ -15,6 +15,12 @@
   memory = "2gb"
 
 [[redirects]]
+  from = "/api/integration/dulce-hora/detail-backfill"
+  to = "/.netlify/functions/detail-backfill-background"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"
   status = 200
