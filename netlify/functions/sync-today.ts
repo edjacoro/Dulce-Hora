@@ -71,7 +71,8 @@ export const handler: Handler = async () => {
     let repairedDate: string | null = null;
     let repairedRecords = 0;
     if (clock.minute < 15) {
-      repairedDate = await findRecentDateNeedingFinalSync(branch.id, date, 14);
+      repairedDate = await findRecentDateNeedingFinalSync(branch.id, date, 14)
+        ?? shiftDate(date, -((clock.hour % 3) + 1));
       if (repairedDate) {
         const repair = await syncDulceHoraDate({
           branchId: branch.id,
@@ -85,7 +86,17 @@ export const handler: Handler = async () => {
       }
     }
 
-    const detailLimit = positiveInteger(process.env.DULCE_HORA_SCHEDULED_DETAIL_LIMIT, 8);
+    const backgroundRun = await queryOne<{ count: string }>(
+      `select count(*)::text as count from sync_runs
+       where branch_id = $1 and integration = 'dulce-hora-panel-details-background'
+         and status = 'running' and started_at > now() - interval '16 minutes'`,
+      [branch.id]
+    );
+    if (Number(backgroundRun?.count ?? 0) > 0) {
+      return json(200, { ok: true, date, detailSkipped: "background-sync-running" });
+    }
+
+    const detailLimit = positiveInteger(process.env.DULCE_HORA_SCHEDULED_DETAIL_LIMIT, 16);
     const detailWindowDays = positiveInteger(process.env.DULCE_HORA_SCHEDULED_DETAIL_WINDOW_DAYS, 14);
     const detailResult = await hydrateDulceHoraDetailBacklog({
       branchId: branch.id,
@@ -93,7 +104,8 @@ export const handler: Handler = async () => {
       userId: user.id,
       dateFrom: shiftDate(date, -(detailWindowDays - 1)),
       dateTo: date,
-      limit: detailLimit
+      limit: detailLimit,
+      maxDurationMs: 16_000
     });
 
     return json(200, {

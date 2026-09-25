@@ -6,6 +6,7 @@ import {
   DulceHoraClient,
   DulceHoraRateLimitError,
   getDulceHoraCredentials,
+  hasParseableDetail,
   type DulceHoraCredentials,
   type DulceHoraDocument,
   type DulceHoraStatisticsPayload,
@@ -317,6 +318,7 @@ export async function hydrateDulceHoraDetailBacklog(input: DetailBacklogInput): 
   };
 
   try {
+    const startedAt = Date.now();
     const limit = readDetailHydrationLimit(input.limit);
     const { entries, totalMissing } = await entriesNeedingDetailBacklogFromDatabase(
       input.branchId,
@@ -328,19 +330,50 @@ export async function hydrateDulceHoraDetailBacklog(input: DetailBacklogInput): 
 
     if (entries.length > 0) {
       await withDulceHoraSession(credentials, async (client) => {
-        const catalog = await catalogFromDatabase(input.organizationId);
+        const databaseCatalog = await catalogFromDatabase(input.organizationId);
+        const knownProducts = new Map(
+          [...databaseCatalog.entries()]
+            .filter(([, product]) => product.productId)
+            .map(([key, product]) => [key, { id: product.productId!, name: product.name }] as const)
+        );
+        let statistics: DulceHoraStatisticsPayload | null = null;
+        try {
+          statistics = await client.fetchStatistics();
+        } catch (error) {
+          result.warnings.push("No se pudo leer el detalle agrupado; se usara el comprobante individual como respaldo.");
+          console.warn("[dulce-hora:bulk-details]", error instanceof Error ? error.message : error);
+        }
+        const catalog = new Map([...databaseCatalog, ...(statistics?.catalog ?? new Map())]);
+        const bulkDetails = new Map<string, Record<string, unknown>>();
+        for (const detail of statistics?.documents ?? []) {
+          if (!hasParseableDetail(detail.detalle)) continue;
+          const date = documentDate(detail);
+          if (date >= input.dateFrom && date <= input.dateTo) {
+            bulkDetails.set(`${date}|${statisticsEntryKey(detail)}`, detail);
+          }
+        }
         let completedDetailRecords = 0;
-        const startedAt = Date.now();
+        const bulkCandidates = entries.filter((candidate) =>
+          bulkDetails.has(`${candidate.date}|${registryEntryKey(candidate.entry)}`)
+        );
+        const fallbackCandidates = entries.filter((candidate) =>
+          !bulkDetails.has(`${candidate.date}|${registryEntryKey(candidate.entry)}`)
+        );
 
-        for (const candidate of entries) {
+        for (const candidate of [...bulkCandidates, ...fallbackCandidates]) {
           if (input.maxDurationMs && Date.now() - startedAt >= input.maxDurationMs) {
             result.warnings.push("La recuperacion de productos alcanzo su limite seguro; los pendientes siguen en la proxima pasada.");
             break;
           }
           try {
-            const document = await fetchDocumentWithRetry(client, candidate.entry);
+            const bulkDetail = bulkDetails.get(`${candidate.date}|${registryEntryKey(candidate.entry)}`);
+            const document = bulkDetail ? statisticsDocument(bulkDetail) : await fetchDocumentWithRetry(client, candidate.entry);
+            if (!hasParseableDetail(document.detail.detalle)) {
+              throw new Error(`El comprobante ${registryEntryKey(candidate.entry)} no contiene un detalle valido`);
+            }
             const parsed = parseDocument(document, candidate.date, catalog);
-            const upsert = await saveDocument(input.organizationId, input.branchId, parsed);
+            parsed.rawData = { ...parsed.rawData, _detailVerified: true };
+            const upsert = await saveDocument(input.organizationId, input.branchId, parsed, knownProducts);
             result.recordsCreated += upsert.created ? 1 : 0;
             result.recordsUpdated += upsert.created ? 0 : 1;
             result.itemRows += parsed.items.length;
@@ -885,6 +918,7 @@ async function entriesNeedingDetailFromDatabase(
        and sd.source = 'dulce-hora-panel'
        and sd.external_id is not null
        and sd.external_id ~ '^[A-Z]:'
+       and coalesce(sd.raw_data->>'_detailVerified', 'false') <> 'true'
        and not exists (
          select 1
          from sale_items si
@@ -928,6 +962,7 @@ async function entriesNeedingDetailBacklogFromDatabase(
        and sd.source = 'dulce-hora-panel'
        and sd.external_id is not null
        and sd.external_id ~ '^[A-Z]:'
+       and coalesce(sd.raw_data->>'_detailVerified', 'false') <> 'true'
        and not exists (
          select 1
          from sale_items si
@@ -974,10 +1009,11 @@ async function successfulBaseSyncDates(branchId: string, dateFrom: string, dateT
 async function catalogFromDatabase(organizationId: string): Promise<Map<string, ProductCatalogItem>> {
   const rows = await db.query<{
     external_id: string | null;
+    product_id: string;
     canonical_name: string;
     category: string | null;
   }>(
-    `select pa.external_id, p.canonical_name, c.name as category
+    `select pa.external_id, p.id as product_id, p.canonical_name, c.name as category
      from product_aliases pa
      join products p on p.id = pa.product_id
      left join categories c on c.id = p.category_id
@@ -995,6 +1031,7 @@ async function catalogFromDatabase(organizationId: string): Promise<Map<string, 
       source,
       id,
       name: row.canonical_name,
+      productId: row.product_id,
       category: row.category ?? undefined
     });
   }
@@ -1179,7 +1216,12 @@ function parseItem(raw: unknown, catalog: Map<string, ProductCatalogItem>): Pars
   };
 }
 
-async function saveDocument(organizationId: string, branchId: string, document: ParsedDocument) {
+async function saveDocument(
+  organizationId: string,
+  branchId: string,
+  document: ParsedDocument,
+  knownProducts?: Map<string, { id: string; name: string }>
+) {
   return db.transaction(async (tx) => {
     const existing = await tx.query<{ id: string }>(
       `select id from sales_documents
@@ -1228,7 +1270,7 @@ async function saveDocument(organizationId: string, branchId: string, document: 
              total = $9,
              payment_method = $10,
              status = $11,
-             raw_data = $12,
+             raw_data = case when $13 and raw_data ? 'detalle' then raw_data else $12 end,
              imported_at = now()
          where id = $1 and branch_id = $2`,
         [
@@ -1243,7 +1285,8 @@ async function saveDocument(organizationId: string, branchId: string, document: 
           document.total,
           document.paymentMethod,
           document.status,
-          JSON.stringify(document.rawData)
+          JSON.stringify(document.rawData),
+          preserveExistingItems
         ]
       );
       if (!preserveExistingItems) {
@@ -1252,24 +1295,44 @@ async function saveDocument(organizationId: string, branchId: string, document: 
     }
 
     if (!preserveExistingItems) {
+      const rows: Array<{
+        id: string;
+        external_product_id: string;
+        original_name: string;
+        normalized_product_id: string;
+        quantity: number;
+        unit_price: number | null;
+        discount: number;
+        line_total: number;
+      }> = [];
       for (const item of document.items) {
-        const productId = await ensureProduct(tx, organizationId, item);
+        const known = knownProducts?.get(item.externalProductId);
+        const productId = known && (known.name === item.originalName || item.originalName.startsWith("Producto externo"))
+          ? known.id
+          : await ensureProduct(tx, organizationId, item);
+        rows.push({
+          id: randomUUID(),
+          external_product_id: item.externalProductId,
+          original_name: item.originalName,
+          normalized_product_id: productId,
+          quantity: item.quantity,
+          unit_price: item.unitPrice,
+          discount: item.discount,
+          line_total: item.lineTotal
+        });
+      }
+      if (rows.length > 0) {
         await tx.query(
           `insert into sale_items
             (id, sales_document_id, external_product_id, original_name, normalized_product_id,
              quantity, unit_price, discount, line_total)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [
-            randomUUID(),
-            documentId,
-            item.externalProductId,
-            item.originalName,
-            productId,
-            item.quantity,
-            item.unitPrice,
-            item.discount,
-            item.lineTotal
-          ]
+           select line.id, $1, line.external_product_id, line.original_name,
+                  line.normalized_product_id, line.quantity, line.unit_price, line.discount, line.line_total
+           from jsonb_to_recordset($2::jsonb) as line(
+             id text, external_product_id text, original_name text, normalized_product_id text,
+             quantity numeric, unit_price numeric, discount numeric, line_total numeric
+           )`,
+          [documentId, JSON.stringify(rows)]
         );
       }
     }

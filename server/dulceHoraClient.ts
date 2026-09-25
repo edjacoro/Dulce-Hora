@@ -15,6 +15,7 @@ export type ProductCatalogItem = {
   source: "product" | "custom";
   id: string;
   name: string;
+  productId?: string;
   category?: string;
   fractioning?: string;
 };
@@ -310,6 +311,16 @@ export function getDulceHoraCredentials(): DulceHoraCredentials | null {
 
 export function dulceHoraCredentialsConfigured() {
   return Boolean(process.env.DULCE_HORA_USERNAME && process.env.DULCE_HORA_PASSWORD);
+}
+
+export function hasParseableDetail(value: unknown) {
+  if (Array.isArray(value)) return true;
+  if (typeof value !== "string") return false;
+  try {
+    return Array.isArray(JSON.parse(value));
+  } catch {
+    return false;
+  }
 }
 
 function documentPath(entry: RegistryEntry) {

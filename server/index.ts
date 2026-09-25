@@ -457,10 +457,11 @@ app.get("/api/dashboard/overview", requireAuth, async (req, res) => {
        (select count(distinct sd.id)::text
         from sales_documents sd
         join branches b on b.id = sd.branch_id
-        join sale_items si on si.sales_document_id = sd.id
         where b.organization_id = $1 ${branchClause}
           and sd.sale_date = $${branchParams.length + 1}
-          and sd.status = 'active') as detailed_today,
+          and sd.status = 'active'
+          and (sd.raw_data->>'_detailVerified' = 'true'
+            or exists (select 1 from sale_items si where si.sales_document_id = sd.id))) as detailed_today,
        (select max(sr.finished_at)::text
         from sync_runs sr
         join branches b on b.id = sr.branch_id
@@ -626,7 +627,8 @@ app.get("/api/sales/summary", requireAuth, async (req, res) => {
          count(sd.id)::text as documents,
          sum(case when sd.status = 'active' then 1 else 0 end)::text as tickets,
          coalesce(sum((select count(si.id) from sale_items si where si.sales_document_id = sd.id)), 0)::text as item_units,
-         coalesce(sum(case when exists (select 1 from sale_items si where si.sales_document_id = sd.id) then 1 else 0 end), 0)::text as item_detail_tickets,
+         coalesce(sum(case when sd.raw_data->>'_detailVerified' = 'true'
+           or exists (select 1 from sale_items si where si.sales_document_id = sd.id) then 1 else 0 end), 0)::text as item_detail_tickets,
          coalesce(sum((
            select coalesce(sum(
              case
