@@ -11,9 +11,6 @@
   included_files = ["server/migrations/*.sql"]
   node_bundler = "esbuild"
 
-[functions.api]
-  memory = "2gb"
-
 [[redirects]]
   from = "/api/integration/dulce-hora/detail-backfill"
   to = "/.netlify/functions/detail-backfill-background"
