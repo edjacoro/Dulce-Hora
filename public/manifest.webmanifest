@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "Dulce Hora",
+  "short_name": "Dulce Hora",
+  "description": "Control de Dulce Hora. Requiere conexión a Internet.",
+  "lang": "es-AR",
+  "start_url": "/ventas",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#713f68",
+  "icons": [
+    { "src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

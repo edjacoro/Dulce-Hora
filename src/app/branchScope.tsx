@@ -27,8 +27,7 @@ export function BranchScopeProvider({ branches, children }: { branches: Branch[]
   const activeBranches = useMemo(() => branches.filter((branch) => branch.active), [branches]);
   const defaultBranchId = activeBranches[0]?.id ?? "all";
   const [branchId, setBranchIdState] = useState(() => {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    const initial = stored === "all" || activeBranches.some((branch) => branch.id === stored) ? stored! : defaultBranchId;
+    const initial = defaultBranchId;
     setApiBranchScope(initial);
     return initial;
   });
@@ -36,13 +35,13 @@ export function BranchScopeProvider({ branches, children }: { branches: Branch[]
     branchId === "all" || activeBranches.some((branch) => branch.id === branchId) ? branchId : defaultBranchId;
 
   useEffect(() => {
+    try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* Storage may be disabled. */ }
     setApiBranchScope(effectiveBranchId);
   }, [effectiveBranchId]);
 
   const setBranchId = useCallback((nextBranchId: string) => {
     if (nextBranchId !== "all" && !activeBranches.some((branch) => branch.id === nextBranchId)) return;
     setApiBranchScope(nextBranchId);
-    window.localStorage.setItem(STORAGE_KEY, nextBranchId);
     setBranchIdState(nextBranchId);
     void queryClient.invalidateQueries();
   }, [activeBranches, queryClient]);

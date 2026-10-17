@@ -3755,3 +3755,6 @@ a {
     font-size: 0.76rem;
   }
 }
+
+.install-app { padding: 8px 16px; background: #fff; border-bottom: 1px solid #e5e7eb; }
+.install-app p { max-width: 640px; margin: 8px 0; font-size: 14px; }

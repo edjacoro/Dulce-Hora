@@ -64,6 +64,11 @@ const defaultEmployeeSeeds = [
   }
 ] as const;
 
+app.use("/api", (_req, res, next) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Netlify-CDN-Cache-Control", "no-store");
+  next();
+});
 app.use(express.json({ limit: "5mb" }));
 app.use(attachUser);
 registerExpenseRoutes(app);
