@@ -474,8 +474,9 @@ function PeriodControls({
             <ArrowLeft size={17} aria-hidden="true" />
           </button>
           <div className="date-display">
-            <strong>{formatFullDate(selectedDate)}</strong>
-            <input type="date" value={selectedDate} onChange={(event) => onDate(event.target.value)} />
+            <strong className="sales-date-full">{formatFullDate(selectedDate)}</strong>
+            <strong className="sales-date-compact" aria-hidden="true">{formatFullDate(selectedDate, true)}</strong>
+            <input aria-label="Fecha de ventas" type="date" value={selectedDate} onChange={(event) => onDate(event.target.value)} />
           </div>
           <button
             className="nav-button"
@@ -590,13 +591,13 @@ function formatDateInput(date: Date) {
   ].join("-");
 }
 
-function formatFullDate(value: string) {
+function formatFullDate(value: string, compact = false) {
   const [year, month, day] = value.split("-").map(Number);
   const date = new Date(year, month - 1, day);
   return new Intl.DateTimeFormat("es-AR", {
-    weekday: "long",
+    weekday: compact ? "short" : "long",
     day: "2-digit",
-    month: "long",
+    month: compact ? "short" : "long",
     year: "numeric"
   }).format(date);
 }

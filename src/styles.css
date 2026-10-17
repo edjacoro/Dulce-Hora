@@ -814,6 +814,10 @@ a {
   text-transform: lowercase;
 }
 
+.sales-date-compact {
+  display: none;
+}
+
 .date-display input {
   position: absolute;
   inset: 0;
@@ -3329,7 +3333,6 @@ a {
   .account-balance-grid,
   .settings-grid,
   .period-controls,
-  .day-nav,
   .date-filter,
   .bar-row,
   .analysis-filter-grid,
@@ -3361,6 +3364,34 @@ a {
 
   .month-only-nav {
     min-width: 0;
+  }
+
+  .day-nav {
+    grid-template-columns: 38px minmax(0, 1fr) 38px;
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .day-nav .date-display {
+    padding-left: 6px;
+    padding-right: 25px;
+  }
+
+  .day-nav .date-display::after {
+    right: 6px;
+  }
+
+  .day-nav .date-display strong {
+    font-size: clamp(11px, 3vw, 14px);
+    white-space: nowrap;
+  }
+
+  .sales-date-full {
+    display: none;
+  }
+
+  .sales-date-compact {
+    display: inline;
   }
 
   .finance-header {
