@@ -19,6 +19,8 @@ import {
   syncDulceHoraWasteHistory
 } from "./dulceHoraSync.js";
 import { registerCashflowRoutes } from "./cashflow.js";
+import { registerPedidosYaImportRoutes } from "./pedidosYaImport.js";
+import { registerPedidosYaSettlementRoutes } from "./pedidosYaSettlement.js";
 import { registerExpenseRoutes } from "./expenses.js";
 import { registerFinanceRoutes } from "./finance.js";
 import { ensureDefaultScheduleCoverage, registerScheduleRoutes } from "./schedule.js";
@@ -75,6 +77,8 @@ registerExpenseRoutes(app);
 registerFinanceRoutes(app);
 registerScheduleRoutes(app);
 registerCashflowRoutes(app);
+registerPedidosYaImportRoutes(app);
+registerPedidosYaSettlementRoutes(app);
 
 const setupSchema = z.object({
   organizationName: z.string().trim().min(2),

@@ -50,6 +50,37 @@ type PortalSalesImportResult = {
   providers: PortalProvider[];
 };
 
+type PedidosYaImportResult = {
+  from: string;
+  to: string;
+  rows: number;
+  created: number;
+  updated: number;
+  cancelledUpdated: number;
+  excluded: number;
+  awaitingAmounts: number;
+  subtotal: number;
+  estimatedIncome: number;
+};
+
+type PedidosYaImportHistory = {
+  imports: Array<{
+    date_from: string;
+    date_to: string;
+    rows_processed: number;
+    rows_created: number;
+    rows_updated: number;
+    rows_rejected: number;
+    created_at: string;
+  }>;
+};
+
+type PedidosYaSettlementResult = { count: number; reconciled: number; from: string; to: string };
+type PedidosYaSettlementHistory = { settlements: Array<{
+  from: string; to: string; sales: string; netSettlement: string; cashCollected: string;
+  payoutDate: string | null;
+}> };
+
 export function IntegrationPage() {
   const queryClient = useQueryClient();
   const importJob = useDulceHoraImportJob();
@@ -70,6 +101,20 @@ export function IntegrationPage() {
   });
   const [csvText, setCsvText] = useState("");
   const [portalError, setPortalError] = useState<string | null>(null);
+  const [pedidosFile, setPedidosFile] = useState<File | null>(null);
+  const [pedidosFrom, setPedidosFrom] = useState(() => `${todayArgentina().slice(0, 7)}-01`);
+  const [pedidosTo, setPedidosTo] = useState(() => todayArgentina());
+  const [pedidosError, setPedidosError] = useState<string | null>(null);
+  const [settlementFile, setSettlementFile] = useState<File | null>(null);
+  const [settlementError, setSettlementError] = useState<string | null>(null);
+  const pedidosHistory = useQuery({
+    queryKey: ["pedidosya-imports"],
+    queryFn: () => api<PedidosYaImportHistory>("/api/imports/pedidosya")
+  });
+  const settlementHistory = useQuery({
+    queryKey: ["pedidosya-settlements"],
+    queryFn: () => api<PedidosYaSettlementHistory>("/api/imports/pedidosya-settlements")
+  });
   const status = useQuery({
     queryKey: ["integration-status"],
     queryFn: () => api<IntegrationStatus>("/api/integration/status")
@@ -84,6 +129,39 @@ export function IntegrationPage() {
     onSuccess: async () => {
       setPortalError(null);
       await invalidateDulceHoraReporting(queryClient);
+    }
+  });
+
+  const pedidosImport = useMutation({
+    mutationFn: async () => {
+      if (!pedidosFile) throw new Error("Selecciona un informe CSV de PedidosYa.");
+      if (!pedidosFrom || !pedidosTo || pedidosFrom > pedidosTo) throw new Error("Revisa el intervalo del informe.");
+      const csv = await pedidosFile.text();
+      if (csv.length > 4_000_000) throw new Error("El informe supera el limite de 4 MB. Descargalo en intervalos mas cortos.");
+      return api<PedidosYaImportResult>("/api/imports/pedidosya", {
+        method: "POST",
+        body: JSON.stringify({ csv, filename: pedidosFile.name, from: pedidosFrom, to: pedidosTo })
+      });
+    },
+    onSuccess: async () => {
+      setPedidosError(null);
+      await Promise.all([invalidateDulceHoraReporting(queryClient), pedidosHistory.refetch()]);
+    }
+  });
+
+  const settlementImport = useMutation({
+    mutationFn: async () => {
+      if (!settlementFile) throw new Error("Selecciona el archivo de liquidaciones.");
+      const csv = await settlementFile.text();
+      if (csv.length > 1_000_000) throw new Error("El archivo supera 1 MB.");
+      return api<PedidosYaSettlementResult>("/api/imports/pedidosya-settlements", {
+        method: "POST",
+        body: JSON.stringify({ csv, filename: settlementFile.name })
+      });
+    },
+    onSuccess: async () => {
+      setSettlementError(null);
+      await Promise.all([invalidateDulceHoraReporting(queryClient), settlementHistory.refetch()]);
     }
   });
 
@@ -236,6 +314,66 @@ export function IntegrationPage() {
               : "Para fechas anteriores, reintenta solo el dia que quieras corregir; no hace falta volver a cargar meses cerrados."}
           </span>
         </div>
+      </section>
+
+      <section className="content-band">
+        <h2><FileSpreadsheet size={18} aria-hidden="true" /> PedidosYa: informe de pedidos</h2>
+        <p>Descarga el CSV desde PedidosYa Portal → Pedidos → Descargar informe. Selecciona el mismo intervalo aqui. El portal permite hasta 31 dias por informe; los pedidos quedan guardados en la base online. El ingreso por pedido es estimado; verifica los pagos definitivos en Estado de Cuenta de PedidosYa.</p>
+        <form className="form-grid" onSubmit={(event) => {
+          event.preventDefault();
+          setPedidosError(null);
+          void pedidosImport.mutateAsync().catch((error: unknown) => {
+            setPedidosError(error instanceof Error ? error.message : "No se pudo importar el informe.");
+          });
+        }}>
+          <label>Desde<input type="date" value={pedidosFrom} onChange={(event) => setPedidosFrom(event.target.value)} /></label>
+          <label>Hasta<input type="date" value={pedidosTo} onChange={(event) => setPedidosTo(event.target.value)} /></label>
+          <label>Informe CSV<input type="file" accept=".csv,text/csv" onChange={(event) => setPedidosFile(event.target.files?.[0] ?? null)} /></label>
+          <button className="primary-button" disabled={pedidosImport.isPending || !pedidosFile} type="submit">
+            <Upload size={18} aria-hidden="true" /> {pedidosImport.isPending ? "Importando…" : "Importar pedidos"}
+          </button>
+        </form>
+        {pedidosError && <p className="form-error">{pedidosError}</p>}
+        {pedidosImport.data && <div className="sync-result">
+          <strong>Informe guardado: {pedidosImport.data.from} a {pedidosImport.data.to}</strong>
+          <span>{pedidosImport.data.created} pedidos nuevos, {pedidosImport.data.updated} actualizados, {pedidosImport.data.cancelledUpdated} cancelaciones actualizadas, {pedidosImport.data.excluded} filas excluidas</span>
+          {pedidosImport.data.awaitingAmounts > 0 && <span>{pedidosImport.data.awaitingAmounts} pedidos entregados aún sin importes: vuelve a descargar ese período cuando PedidosYa los complete.</span>}
+          <span>Ventas: {formatCurrency(pedidosImport.data.subtotal)} · Ingreso estimado por pedidos: {formatCurrency(pedidosImport.data.estimatedIncome)}</span>
+        </div>}
+        {pedidosHistory.data?.imports.length ? <div className="run-list">
+          {pedidosHistory.data.imports.map((item, index) => <div className="list-row" key={`${item.created_at}-${index}`}>
+            <strong>{item.date_from} a {item.date_to}</strong>
+            <span>{item.rows_processed} filas · {item.rows_created} nuevos · {item.rows_updated} actualizados · {item.rows_rejected} excluidos</span>
+          </div>)}
+        </div> : null}
+      </section>
+
+      <section className="content-band">
+        <h2><FileSpreadsheet size={18} aria-hidden="true" /> PedidosYa: estados de cuenta</h2>
+        <p>Importa las liquidaciones semanales para registrar el neto informado por PedidosYa después de servicios, cargos operativos, publicidad, reintegros e impuestos. La liquidación corrige en Finanzas la diferencia con los importes estimados por pedido.</p>
+        <form className="form-grid" onSubmit={(event) => {
+          event.preventDefault();
+          setSettlementError(null);
+          void settlementImport.mutateAsync().catch((error: unknown) => {
+            setSettlementError(error instanceof Error ? error.message : "No se pudieron importar las liquidaciones.");
+          });
+        }}>
+          <label>Liquidaciones CSV<input type="file" accept=".csv,text/csv" onChange={(event) => setSettlementFile(event.target.files?.[0] ?? null)} /></label>
+          <button className="primary-button" disabled={settlementImport.isPending || !settlementFile} type="submit">
+            <Upload size={18} aria-hidden="true" /> {settlementImport.isPending ? "Importando…" : "Importar liquidaciones"}
+          </button>
+        </form>
+        {settlementError && <p className="form-error">{settlementError}</p>}
+        {settlementImport.data && <div className="sync-result">
+          <strong>{settlementImport.data.count} liquidaciones guardadas</strong>
+          <span>{settlementImport.data.reconciled} semanas conciliadas con pedidos, desde {settlementImport.data.from} hasta {settlementImport.data.to}.</span>
+        </div>}
+        {settlementHistory.data?.settlements.length ? <div className="run-list">
+          {settlementHistory.data.settlements.slice(0, 6).map((item) => <div className="list-row" key={`${item.from}-${item.to}`}>
+            <strong>{item.from} a {item.to}</strong>
+            <span>Neto liquidado: {formatCurrency(Number(item.netSettlement))} · Efectivo ya cobrado: {formatCurrency(-Number(item.cashCollected))}</span>
+          </div>)}
+        </div> : null}
       </section>
 
       <section className="content-band">

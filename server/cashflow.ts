@@ -13,6 +13,7 @@ type DateRange = {
 type CashAccountKey = "cash" | "pedidosya" | "rappi" | "mercado_pago" | "banco_provincia";
 
 type SalesCashRow = {
+  branch_id: string;
   sale_date: string;
   payment_method: string | null;
   source: string;
@@ -21,6 +22,19 @@ type SalesCashRow = {
   notes: string | null;
   gross: string;
   documents: string;
+  estimated_income: string;
+  cash_collected: string;
+  amount_owed: string;
+};
+
+type PedidosYaSettlementRow = {
+  branch_id: string;
+  period_start: string;
+  period_end: string;
+  sales: string;
+  cash_collected: string;
+  net_settlement: string;
+  payout_date: string | null;
 };
 
 type ExpenseCashRow = {
@@ -131,15 +145,21 @@ export function registerCashflowRoutes(app: Express) {
       to: range.to
     };
 
-    const [sales, expenses, withdrawals, transfers, adjustments] = await Promise.all([
+    const [sales, expenses, withdrawals, transfers, adjustments, settlements] = await Promise.all([
       db.query<SalesCashRow>(
-        `select sd.sale_date::text as sale_date,
+        `select sd.branch_id, sd.sale_date::text as sale_date,
                 sd.payment_method,
                 sd.source,
                 coalesce(sd.raw_data->>'provider', sd.raw_data->>'providerLabel') as provider,
                 sd.raw_data->>'paymentKind' as payment_kind,
                 sd.raw_data->>'notes' as notes,
                 coalesce(sum(${netTotal}), 0)::text as gross,
+                coalesce(sum(case when sd.source = 'pedidosya-csv'
+                  then (sd.raw_data->>'estimatedIncome')::numeric else 0 end), 0)::text as estimated_income,
+                coalesce(sum(case when sd.source = 'pedidosya-csv'
+                  then (sd.raw_data->>'cashCollected')::numeric else 0 end), 0)::text as cash_collected,
+                coalesce(sum(case when sd.source = 'pedidosya-csv'
+                  then (sd.raw_data->>'amountOwed')::numeric else 0 end), 0)::text as amount_owed,
                 count(sd.id)::text as documents
          from sales_documents sd
          join branches b on b.id = sd.branch_id
@@ -148,7 +168,7 @@ export function registerCashflowRoutes(app: Express) {
            and sd.sale_date >= $3
            and sd.sale_date <= $4
            and sd.status <> 'credited'
-         group by sd.sale_date, sd.payment_method, sd.source,
+         group by sd.branch_id, sd.sale_date, sd.payment_method, sd.source,
                   coalesce(sd.raw_data->>'provider', sd.raw_data->>'providerLabel'),
                   sd.raw_data->>'paymentKind',
                   sd.raw_data->>'notes'
@@ -168,6 +188,7 @@ export function registerCashflowRoutes(app: Express) {
          left join expense_categories ec on ec.id = e.category_id
          where b.organization_id = $1
            and ($2::text is null or b.id = $2)
+           and e.source not in ('pedidosya-csv-fee', 'pedidosya-settlement-adjustment')
            and coalesce(ec.pnl_group, 'operating') <> 'capex'
            and coalesce(case when e.status = 'paid' then e.paid_date else e.due_date end, e.expense_date) <= $3
          group by coalesce(case when e.status = 'paid' then e.paid_date else e.due_date end, e.expense_date),
@@ -220,6 +241,15 @@ export function registerCashflowRoutes(app: Express) {
            and ca.adjustment_date <= $3
          order by ca.adjustment_date desc, ca.created_at desc`,
         [organizationId, branchId, range.to]
+      ),
+      db.query<PedidosYaSettlementRow>(
+        `select s.branch_id, s.period_start::text, s.period_end::text,
+                s.sales::text, s.cash_collected::text, s.net_settlement::text,
+                s.payout_date::text
+         from pedidosya_settlements s join branches b on b.id = s.branch_id
+         where b.organization_id = $1 and ($2::text is null or b.id = $2)
+           and s.period_start <= $3`,
+        [organizationId, branchId, range.to]
       )
     ]);
 
@@ -236,8 +266,45 @@ export function registerCashflowRoutes(app: Express) {
       const saleDay = days.get(row.sale_date);
 
       if (inSelectedMonth) {
-        addChannel(channels, channel.channelLabel, gross, documents, gross * channel.commissionRate, gross - gross * channel.commissionRate);
+        const cost = row.source === "pedidosya-csv"
+          ? gross - toNumber(row.estimated_income)
+          : gross * channel.commissionRate;
+        addChannel(channels, channel.channelLabel, gross, documents, cost, gross - cost);
         if (saleDay) saleDay.grossSales += gross;
+      }
+
+      if (row.source === "pedidosya-csv") {
+        const settled = settlements.rows.some((item) => item.branch_id === row.branch_id &&
+          row.sale_date >= item.period_start && row.sale_date <= item.period_end);
+        if (settled) {
+          if (row.payment_kind === "cash") {
+            movements.push({ date: row.sale_date, account: "cash", amount: toNumber(row.cash_collected),
+              kind: "sale", label: "Pedidos Ya efectivo (segun informe)" });
+          }
+          continue;
+        }
+        const payoutDate = pedidosYaPayoutDate(row.sale_date);
+        const realCost = roundMoney(gross - toNumber(row.estimated_income));
+        if (row.payment_kind === "cash") {
+          const cash = toNumber(row.cash_collected);
+          const owed = toNumber(row.amount_owed);
+          movements.push({ date: row.sale_date, account: "cash", amount: cash, kind: "sale", label: "Pedidos Ya efectivo (segun informe)" });
+          if (payoutDate <= range.to) {
+            movements.push({ date: payoutDate, account: "pedidosya", amount: -owed, kind: "commission", label: "Saldo estimado Pedidos Ya efectivo" });
+            addDaily(days, payoutDate, "commissions", realCost);
+          } else if (inSelectedMonth) {
+            pendingPayouts.push({ date: payoutDate, provider: "Saldo Pedidos Ya efectivo", gross, net: -owed, commissions: realCost });
+          }
+        } else {
+          const income = toNumber(row.estimated_income);
+          if (payoutDate <= range.to) {
+            movements.push({ date: payoutDate, account: "pedidosya", amount: income, kind: "sale", label: "Ingreso estimado Pedidos Ya online" });
+            addDaily(days, payoutDate, "commissions", realCost);
+          } else if (inSelectedMonth) {
+            pendingPayouts.push({ date: payoutDate, provider: "Pedidos Ya", gross, net: income, commissions: realCost });
+          }
+        }
+        continue;
       }
 
       if (channel.kind === "pedidosYaOnline") {
@@ -270,6 +337,31 @@ export function registerCashflowRoutes(app: Express) {
       const net = roundMoney(gross - commission);
       movements.push({ date: row.sale_date, account: channel.account, amount: net, kind: "sale", label: channel.channelLabel });
       if (commission > 0) addDaily(days, row.sale_date, "commissions", commission);
+    }
+
+    for (const settlement of settlements.rows) {
+      const payoutDate = settlement.payout_date ?? addDays(settlement.period_end, 12);
+      const net = toNumber(settlement.net_settlement);
+      const cash = -toNumber(settlement.cash_collected);
+      const reportedCash = sum(sales.rows.filter((row) => row.source === "pedidosya-csv" &&
+        row.branch_id === settlement.branch_id && row.payment_kind === "cash" &&
+        row.sale_date >= settlement.period_start && row.sale_date <= settlement.period_end
+      ).map((row) => toNumber(row.cash_collected)));
+      const cashCorrection = roundMoney(cash - reportedCash);
+      if (cashCorrection !== 0) {
+        movements.push({ date: settlement.period_end, account: "cash", amount: cashCorrection,
+          kind: "adjustment", label: "Conciliacion efectivo Pedidos Ya" });
+      }
+      const combinedIncome = net + cash;
+      const statementCost = roundMoney(toNumber(settlement.sales) - combinedIncome);
+      addDaily(days, settlement.period_end, "commissions", statementCost);
+      if (payoutDate <= range.to) {
+        movements.push({ date: payoutDate, account: "pedidosya", amount: net,
+          kind: "sale", label: "Liquidacion Pedidos Ya segun estado de cuenta" });
+      } else if (settlement.period_end >= range.from && settlement.period_end <= range.to) {
+        pendingPayouts.push({ date: payoutDate, provider: "Pedidos Ya (estado de cuenta)",
+          gross: toNumber(settlement.sales), net, commissions: statementCost });
+      }
     }
 
     for (const row of expenses.rows) {
