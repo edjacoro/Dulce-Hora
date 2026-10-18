@@ -93,70 +93,88 @@ export function registerPedidosYaImportRoutes(app: Express) {
         categoryId = saved.rows[0].id;
       }
 
-      for (const order of parsed.orders) {
-        const externalId = `pedidosya:${order.storeId}:${order.orderId}`;
-        const existing = await tx.query<{ id: string }>(
-          `select id from sales_documents where branch_id = $1 and external_id = $2`,
-          [branch.id, externalId]
+      // A Netlify function has a short request budget. Send each group to Postgres
+      // in a few statements instead of doing three network round trips per order.
+      for (let offset = 0; offset < parsed.orders.length; offset += 100) {
+        const batch = parsed.orders.slice(offset, offset + 100).map((order) => {
+          const externalId = `pedidosya:${order.storeId}:${order.orderId}`;
+          const actualCost = Math.round((order.subtotal - order.estimatedIncome) * 100) / 100;
+          return {
+            id: randomUUID(), externalId, orderId: order.orderId,
+            date: order.date, time: order.time, subtotal: order.subtotal, actualCost,
+            paymentMethod: order.paymentKind === "cash" ? "Pedidos Ya efectivo" : "Pedidos Ya online",
+            details: {
+              provider: "pedidosya", providerLabel: "Pedidos Ya", paymentKind: order.paymentKind,
+              storeId: order.storeId, storeName: order.storeName, orderId: order.orderId,
+              estimatedIncome: order.estimatedIncome, cashCollected: order.cashCollected,
+              amountOwed: order.amountOwed, payout: order.payout, actualCost,
+              commission: order.commission, onlinePaymentFee: order.onlinePaymentFee,
+              tax: order.tax, merchantDiscount: order.merchantDiscount, marketingCost: order.marketingCost
+            }
+          };
+        });
+        const payload = JSON.stringify(batch);
+        const existing = await tx.query<{ count: string }>(
+          `select count(*)::text as count from sales_documents
+           where branch_id = $1 and external_id = any($2::text[])`,
+          [branch.id, batch.map((item) => item.externalId)]
         );
-        if (existing.rows.length) updated++; else created++;
-        const details = {
-          provider: "pedidosya", providerLabel: "Pedidos Ya", paymentKind: order.paymentKind,
-          storeId: order.storeId, storeName: order.storeName, orderId: order.orderId,
-          estimatedIncome: order.estimatedIncome, cashCollected: order.cashCollected,
-          amountOwed: order.amountOwed, payout: order.payout,
-          actualCost: Math.round((order.subtotal - order.estimatedIncome) * 100) / 100,
-          commission: order.commission, onlinePaymentFee: order.onlinePaymentFee,
-          tax: order.tax, merchantDiscount: order.merchantDiscount, marketingCost: order.marketingCost
-        };
+        updated += Number(existing.rows[0].count);
+        created += batch.length - Number(existing.rows[0].count);
         await tx.query(
           `insert into sales_documents
              (id, branch_id, external_id, dedupe_key, document_number, document_type,
               sale_date, sale_time, customer_name, subtotal, discount, total, payment_method,
               status, source, raw_data)
-           values ($1, $2, $3, $3, $4, 'Pedido PedidosYa', $5, $6, 'Pedidos Ya',
-                   $7, 0, $7, $8, 'active', 'pedidosya-csv', $9)
+           select item.id, $1, item."externalId", item."externalId", item."orderId",
+                  'Pedido PedidosYa', item.date::date, item.time::time, 'Pedidos Ya',
+                  item.subtotal, 0, item.subtotal, item."paymentMethod", 'active',
+                  'pedidosya-csv', item.details
+           from jsonb_to_recordset($2::jsonb) as item(
+             id text, "externalId" text, "orderId" text, date text, time text,
+             subtotal numeric, "paymentMethod" text, details jsonb)
            on conflict (branch_id, external_id) where external_id is not null
            do update set sale_date = excluded.sale_date, sale_time = excluded.sale_time,
                          subtotal = excluded.subtotal, total = excluded.total,
                          payment_method = excluded.payment_method, status = excluded.status,
                          raw_data = excluded.raw_data, imported_at = now()`,
-          [randomUUID(), branch.id, externalId, order.orderId, order.date, order.time,
-           order.subtotal, order.paymentKind === "cash" ? "Pedidos Ya efectivo" : "Pedidos Ya online",
-           JSON.stringify(details)]
+          [branch.id, payload]
         );
-        const actualCost = details.actualCost;
         await tx.query(
           `insert into expenses
              (id, branch_id, expense_date, accounting_month, paid_date, category_id,
               supplier, description, amount, payment_method, payment_type,
               cash_account, status, source, external_id, created_by)
-           values ($1, $2, $3, $4, $3, $5, 'Pedidos Ya', $6, $7, 'Plataforma',
-                   'bank', 'pedidosya', 'paid', 'pedidosya-csv-fee', $8, $9)
+           select item.id, $1, item.date::date, left(item.date, 7), item.date::date,
+                  $2, 'Pedidos Ya', 'Cargos estimados del pedido ' || item."orderId",
+                  item."actualCost", 'Plataforma', 'bank', 'pedidosya', 'paid',
+                  'pedidosya-csv-fee', item."externalId", $3
+           from jsonb_to_recordset($4::jsonb) as item(
+             id text, "externalId" text, "orderId" text, date text, "actualCost" numeric)
            on conflict (branch_id, source, external_id) where external_id is not null
            do update set expense_date = excluded.expense_date,
                          accounting_month = excluded.accounting_month,
                          paid_date = excluded.paid_date, amount = excluded.amount,
                          category_id = excluded.category_id`,
-          [randomUUID(), branch.id, order.date, order.date.slice(0, 7), categoryId,
-           `Cargos estimados del pedido ${order.orderId}`, actualCost, externalId, req.user!.id]
+          [branch.id, categoryId, req.user!.id, payload]
         );
       }
 
-      for (const cancelled of parsed.cancelledOrderIds) {
-        const externalId = `pedidosya:${cancelled}`;
-        const existing = await tx.query<{ id: string }>(
+      if (parsed.cancelledOrderIds.length) {
+        const cancelledIds = parsed.cancelledOrderIds.map((id) => `pedidosya:${id}`);
+        const cancelled = await tx.query<{ id: string }>(
           `update sales_documents set status = 'credited', imported_at = now()
-           where branch_id = $1 and external_id = $2 and source = 'pedidosya-csv'
-             and status <> 'credited' returning id`,
-          [branch.id, externalId]
+           where branch_id = $1 and external_id = any($2::text[])
+             and source = 'pedidosya-csv' and status <> 'credited' returning id`,
+          [branch.id, cancelledIds]
         );
-        if (existing.rows.length) {
-          cancelledUpdated++;
+        cancelledUpdated = cancelled.rows.length;
+        if (cancelledUpdated) {
           await tx.query(
             `update expenses set amount = 0
-             where branch_id = $1 and source = 'pedidosya-csv-fee' and external_id = $2`,
-            [branch.id, externalId]
+             where branch_id = $1 and source = 'pedidosya-csv-fee'
+               and external_id = any($2::text[])`,
+            [branch.id, cancelledIds]
           );
         }
       }
